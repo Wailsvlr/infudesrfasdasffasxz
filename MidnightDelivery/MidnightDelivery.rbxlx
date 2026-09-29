@@ -14864,19 +14864,7 @@ return ScareFx
             <Item class="UICorner" referent="462">
               <Properties>
                 <string name="Name">UICorner</string>
-                <UDim name="BottomLeftRadius">
-                  <S>0</S>
-                  <O>6</O>
-                </UDim>
-                <UDim name="BottomRightRadius">
-                  <S>0</S>
-                  <O>6</O>
-                </UDim>
-                <UDim name="TopLeftRadius">
-                  <S>0</S>
-                  <O>6</O>
-                </UDim>
-                <UDim name="TopRightRadius">
+                <UDim name="CornerRadius">
                   <S>0</S>
                   <O>6</O>
                 </UDim>
@@ -14925,19 +14913,7 @@ return ScareFx
               <Item class="UICorner" referent="465">
                 <Properties>
                   <string name="Name">UICorner</string>
-                  <UDim name="BottomLeftRadius">
-                    <S>0</S>
-                    <O>4</O>
-                  </UDim>
-                  <UDim name="BottomRightRadius">
-                    <S>0</S>
-                    <O>4</O>
-                  </UDim>
-                  <UDim name="TopLeftRadius">
-                    <S>0</S>
-                    <O>4</O>
-                  </UDim>
-                  <UDim name="TopRightRadius">
+                  <UDim name="CornerRadius">
                     <S>0</S>
                     <O>4</O>
                   </UDim>
@@ -15572,19 +15548,7 @@ return Logic
         <Item class="UICorner" referent="482">
           <Properties>
             <string name="Name">UICorner</string>
-            <UDim name="BottomLeftRadius">
-              <S>0</S>
-              <O>6</O>
-            </UDim>
-            <UDim name="BottomRightRadius">
-              <S>0</S>
-              <O>6</O>
-            </UDim>
-            <UDim name="TopLeftRadius">
-              <S>0</S>
-              <O>6</O>
-            </UDim>
-            <UDim name="TopRightRadius">
+            <UDim name="CornerRadius">
               <S>0</S>
               <O>6</O>
             </UDim>
@@ -15732,19 +15696,7 @@ return Logic
         <Item class="UICorner" referent="489">
           <Properties>
             <string name="Name">UICorner</string>
-            <UDim name="BottomLeftRadius">
-              <S>0</S>
-              <O>6</O>
-            </UDim>
-            <UDim name="BottomRightRadius">
-              <S>0</S>
-              <O>6</O>
-            </UDim>
-            <UDim name="TopLeftRadius">
-              <S>0</S>
-              <O>6</O>
-            </UDim>
-            <UDim name="TopRightRadius">
+            <UDim name="CornerRadius">
               <S>0</S>
               <O>6</O>
             </UDim>
@@ -15908,19 +15860,7 @@ return Logic
         <Item class="UICorner" referent="498">
           <Properties>
             <string name="Name">UICorner</string>
-            <UDim name="BottomLeftRadius">
-              <S>0</S>
-              <O>6</O>
-            </UDim>
-            <UDim name="BottomRightRadius">
-              <S>0</S>
-              <O>6</O>
-            </UDim>
-            <UDim name="TopLeftRadius">
-              <S>0</S>
-              <O>6</O>
-            </UDim>
-            <UDim name="TopRightRadius">
+            <UDim name="CornerRadius">
               <S>0</S>
               <O>6</O>
             </UDim>
@@ -16003,19 +15943,7 @@ return Logic
             <Item class="UICorner" referent="503">
               <Properties>
                 <string name="Name">UICorner</string>
-                <UDim name="BottomLeftRadius">
-                  <S>0</S>
-                  <O>3</O>
-                </UDim>
-                <UDim name="BottomRightRadius">
-                  <S>0</S>
-                  <O>3</O>
-                </UDim>
-                <UDim name="TopLeftRadius">
-                  <S>0</S>
-                  <O>3</O>
-                </UDim>
-                <UDim name="TopRightRadius">
+                <UDim name="CornerRadius">
                   <S>0</S>
                   <O>3</O>
                 </UDim>
@@ -16132,19 +16060,7 @@ return Logic
             <Item class="UICorner" referent="507">
               <Properties>
                 <string name="Name">UICorner</string>
-                <UDim name="BottomLeftRadius">
-                  <S>0</S>
-                  <O>4</O>
-                </UDim>
-                <UDim name="BottomRightRadius">
-                  <S>0</S>
-                  <O>4</O>
-                </UDim>
-                <UDim name="TopLeftRadius">
-                  <S>0</S>
-                  <O>4</O>
-                </UDim>
-                <UDim name="TopRightRadius">
+                <UDim name="CornerRadius">
                   <S>0</S>
                   <O>4</O>
                 </UDim>
@@ -16652,19 +16568,7 @@ return Logic
           <Item class="UICorner" referent="530">
             <Properties>
               <string name="Name">UICorner</string>
-              <UDim name="BottomLeftRadius">
-                <S>0</S>
-                <O>6</O>
-              </UDim>
-              <UDim name="BottomRightRadius">
-                <S>0</S>
-                <O>6</O>
-              </UDim>
-              <UDim name="TopLeftRadius">
-                <S>0</S>
-                <O>6</O>
-              </UDim>
-              <UDim name="TopRightRadius">
+              <UDim name="CornerRadius">
                 <S>0</S>
                 <O>6</O>
               </UDim>

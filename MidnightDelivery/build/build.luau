@@ -15,8 +15,31 @@ local Place = require("./Place")
 
 local OUTPUT = "MidnightDelivery.rbxlx"
 
+-- The bundled API database (0.728) writes UICorner as four per-corner radii. Older Studio
+-- builds only know the classic single CornerRadius, which every Studio still reads, so the
+-- file keeps the classic form for compatibility.
+local function classicCorners(xml: string): string
+	return (string.gsub(xml, '(<Item class="UICorner" referent="[^"]*">.-</Item>)', function(item)
+		local radii = {}
+		for name, scale, offset in string.gmatch(item, '<UDim name="(%a+)Radius">%s*<S>([^<]*)</S>%s*<O>([^<]*)</O>%s*</UDim>') do
+			radii[name] = scale .. "|" .. offset
+		end
+		local value = radii.TopLeft
+		assert(value and radii.TopRight == value and radii.BottomLeft == value and radii.BottomRight == value, "UICorner radii differ")
+		local scale, offset = string.match(value, "([^|]*)|(.*)")
+		local first = true
+		return (string.gsub(item, '(%s*)<UDim name="%a+Radius">%s*<S>[^<]*</S>%s*<O>[^<]*</O>%s*</UDim>', function(indent)
+			if first then
+				first = false
+				return string.format('%s<UDim name="CornerRadius">%s<S>%s</S>%s<O>%s</O>%s</UDim>', indent, indent .. "  ", scale, indent .. "  ", offset, indent)
+			end
+			return ""
+		end))
+	end))
+end
+
 local game = Place.make()
-fs.writeFile(OUTPUT, roblox.serializePlace(game, true))
+fs.writeFile(OUTPUT, classicCorners(roblox.serializePlace(game, true)))
 print(string.format("wrote %s (%d property assignments recorded)", OUTPUT, #B.records))
 
 local dumpIndex = table.find(process.args, "--dump")
