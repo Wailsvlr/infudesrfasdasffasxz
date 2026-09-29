@@ -1,0 +1,361 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Midnight Delivery preview</title>
+<!--
+  APPROXIMATE PREVIEW. Renders scene.json / ui.json exported by build/build.luau --dump
+  with three.js and HTML. It checks scale, layout and composition from the real place
+  data; it does not reproduce Roblox materials, Future lighting, fonts or core UI.
+-->
+<style>
+  html, body { margin: 0; background: #000; overflow: hidden; font-family: "DejaVu Sans", "Liberation Sans", Arial, sans-serif; }
+  #stage { position: relative; }
+  canvas { display: block; }
+  #ui { position: absolute; inset: 0; pointer-events: none; }
+  .mock { position: absolute; border: 1px dashed rgba(255,255,255,0.45); color: rgba(255,255,255,0.6); font-size: 10px; box-sizing: border-box; padding: 2px 4px; }
+  .mockbtn { position: absolute; background: rgba(0,0,0,0.45); border-radius: 10px; }
+  #mark { position: absolute; left: 8px; bottom: 8px; background: rgba(120,20,20,0.85); color: #fff; font: 700 12px "DejaVu Sans", sans-serif; padding: 4px 8px; border-radius: 3px; z-index: 10; }
+  #caption { position: absolute; right: 8px; bottom: 8px; background: rgba(0,0,0,0.7); color: #ddd; font: 12px "DejaVu Sans", sans-serif; padding: 4px 8px; border-radius: 3px; z-index: 10; }
+</style>
+<script type="importmap">{ "imports": { "three": "/three.module.js" } }</script>
+</head>
+<body>
+<div id="stage"><div id="ui"></div><div id="mark">APPROXIMATE PREVIEW (three.js + HTML from place data) — NOT A ROBLOX SCREENSHOT</div><div id="caption"></div></div>
+<script type="module">
+import * as THREE from "three";
+
+const scene = await (await fetch("/scene.json")).json();
+const uiData = await (await fetch("/ui.json")).json();
+
+// ---------- 3D ----------
+const MAT = {
+  Metal: { roughness: 0.42, metalness: 0.55 },
+  CorrodedMetal: { roughness: 0.85, metalness: 0.25 },
+  SmoothPlastic: { roughness: 0.55, metalness: 0 },
+  Plastic: { roughness: 0.7, metalness: 0 },
+  Plaster: { roughness: 0.95, metalness: 0 },
+  Wood: { roughness: 0.75, metalness: 0 },
+  WoodPlanks: { roughness: 0.8, metalness: 0 },
+  Carpet: { roughness: 1, metalness: 0 },
+  Fabric: { roughness: 1, metalness: 0 },
+  Rubber: { roughness: 0.9, metalness: 0 },
+  Cardboard: { roughness: 0.95, metalness: 0 },
+};
+
+function cfMatrix(c) {
+  const m = new THREE.Matrix4();
+  m.set(c[3], c[4], c[5], c[0], c[6], c[7], c[8], c[1], c[9], c[10], c[11], c[2], 0, 0, 0, 1);
+  return m;
+}
+
+function buildWorld(opts) {
+  const world = new THREE.Group();
+  const meshes = [];
+  scene.parts.forEach((p, i) => {
+    if (p.transparency >= 1) return;
+    if (!opts.showScaleRef && p.path.includes("_DevOnly")) return;
+    let geo;
+    const [sx, sy, sz] = p.size;
+    if (p.shape === "Cylinder") {
+      geo = new THREE.CylinderGeometry(Math.min(sy, sz) / 2, Math.min(sy, sz) / 2, sx, 24);
+      geo.rotateZ(Math.PI / 2);
+    } else if (p.shape === "Ball") {
+      geo = new THREE.SphereGeometry(Math.min(sx, sy, sz) / 2, 16, 12);
+    } else {
+      geo = new THREE.BoxGeometry(sx, sy, sz);
+    }
+    const color = new THREE.Color("#" + p.color);
+    let mat;
+    if (p.material === "Neon") {
+      mat = new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 1.1, roughness: 1 });
+    } else {
+      const m = MAT[p.material] || MAT.Plastic;
+      mat = new THREE.MeshStandardMaterial({ color, roughness: m.roughness, metalness: m.metalness });
+    }
+    if (p.transparency > 0) { mat.transparent = true; mat.opacity = 1 - p.transparency; mat.depthWrite = false; }
+    const mesh = new THREE.Mesh(geo, mat);
+    let matrix = cfMatrix(p.cf);
+    if (opts.doorsOpen && p.name.startsWith("Door") && p.path.includes("Elevator.Doors")) {
+      const dz = p.name === "DoorLeft" ? -2.85 : 2.85;
+      matrix = new THREE.Matrix4().makeTranslation(0, 0, dz).multiply(matrix);
+    }
+    mesh.matrixAutoUpdate = false;
+    mesh.matrix.copy(matrix);
+    mesh.castShadow = p.shadow && p.transparency === 0;
+    mesh.receiveShadow = true;
+    mesh.userData.index = i;
+    world.add(mesh);
+    meshes[i] = mesh;
+  });
+
+  // Surface text
+  const FACES = {
+    Front: { n: [0, 0, -1], r: [-1, 0, 0], u: [0, 1, 0], w: 0, h: 1 },
+    Back: { n: [0, 0, 1], r: [1, 0, 0], u: [0, 1, 0], w: 0, h: 1 },
+    Right: { n: [1, 0, 0], r: [0, 0, -1], u: [0, 1, 0], w: 2, h: 1 },
+    Left: { n: [-1, 0, 0], r: [0, 0, 1], u: [0, 1, 0], w: 2, h: 1 },
+  };
+  for (const g of scene.surfaceGuis) {
+    const p = scene.parts[g.part];
+    if (!p || p.transparency >= 1) continue;
+    if (!opts.showScaleRef && p.path.includes("_DevOnly")) continue;
+    const f = FACES[g.face];
+    if (!f) continue;
+    const fw = p.size[f.w], fh = p.size[f.h];
+    const PPS = 200;
+    const cw = Math.max(8, Math.round(fw * PPS)), ch = Math.max(8, Math.round(fh * PPS));
+    const canvas = document.createElement("canvas");
+    canvas.width = cw; canvas.height = ch;
+    const ctx = canvas.getContext("2d");
+    const labels = g.labels;
+    if (labels.length === 1 && labels[0].scaled) {
+      const l = labels[0];
+      let size = ch * 0.82;
+      ctx.font = `${l.bold === "Bold" ? 700 : 400} ${size}px "DejaVu Sans", sans-serif`;
+      const tw = ctx.measureText(l.text).width;
+      if (tw > cw * 0.92) size *= (cw * 0.92) / tw;
+      ctx.font = `${l.bold === "Bold" ? 700 : 400} ${size}px "DejaVu Sans", sans-serif`;
+      ctx.fillStyle = "#" + l.color; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.fillText(l.text, cw / 2, ch / 2 + size * 0.04);
+    } else {
+      // gui pixels-per-stud in the place is 60-80; scale label sizes to this canvas
+      const k = PPS / 80;
+      let y = 6 * k;
+      for (const l of labels) {
+        const size = l.size * k;
+        ctx.font = `${l.bold === "Bold" ? 700 : 400} ${size}px "DejaVu Sans", sans-serif`;
+        ctx.fillStyle = "#" + l.color; ctx.textAlign = "left"; ctx.textBaseline = "top";
+        const words = l.text.split(" "); let line = "";
+        for (const w of words) {
+          const t = line ? line + " " + w : w;
+          if (ctx.measureText(t).width > cw - 16 * k && line) { ctx.fillText(line, 8 * k, y); y += size * 1.15; line = w; } else line = t;
+        }
+        ctx.fillText(line, 8 * k, y); y += size * 1.15 + 3 * k;
+      }
+    }
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    const mat = g.lightInfluence > 0
+      ? new THREE.MeshStandardMaterial({ map: tex, transparent: true, roughness: 0.8 })
+      : new THREE.MeshBasicMaterial({ map: tex, transparent: true });
+    const plane = new THREE.Mesh(new THREE.PlaneGeometry(fw, fh), mat);
+    const n = new THREE.Vector3(...f.n), r = new THREE.Vector3(...f.r), u = new THREE.Vector3(...f.u);
+    const half = f.n[0] !== 0 ? p.size[0] / 2 : f.n[1] !== 0 ? p.size[1] / 2 : p.size[2] / 2;
+    const local = new THREE.Matrix4().makeBasis(r, u, n).setPosition(n.clone().multiplyScalar(half + 0.004));
+    plane.matrixAutoUpdate = false;
+    plane.matrix.copy(cfMatrix(p.cf).multiply(local));
+    world.add(plane);
+  }
+
+  // Lights (intensity mapping is a rough calibration, not Roblox's)
+  const K = opts.lightK ?? 22;
+  for (const l of scene.lights) {
+    const color = new THREE.Color("#" + l.color);
+    if (l.class === "PointLight") {
+      const light = new THREE.PointLight(color, l.brightness * K, l.range * 1.1, 1.15);
+      light.position.set(...l.pos);
+      light.castShadow = l.shadows;
+      light.shadow.mapSize.set(1024, 1024);
+      light.shadow.bias = -0.002;
+      light.shadow.radius = 3;
+      world.add(light);
+    } else if (l.class === "SurfaceLight") {
+      const m = cfMatrix(l.cf);
+      const dirLocal = { Front: [0, 0, -1], Back: [0, 0, 1], Top: [0, 1, 0], Bottom: [0, -1, 0], Left: [-1, 0, 0], Right: [1, 0, 0] }[l.face];
+      const dir = new THREE.Vector3(...dirLocal).transformDirection(m);
+      const pos = new THREE.Vector3(...l.pos);
+      const light = new THREE.SpotLight(color, l.brightness * K * 0.8, l.range, THREE.MathUtils.degToRad(l.angle / 2), 0.6, 1.2);
+      light.position.copy(pos.clone().add(dir.clone().multiplyScalar(0.1)));
+      light.target.position.copy(pos.clone().add(dir.multiplyScalar(5)));
+      world.add(light); world.add(light.target);
+    }
+  }
+  world.add(new THREE.AmbientLight(0x221f1c, opts.ambient ?? 9));
+  return world;
+}
+
+// Stand-in character (R15 block proportions, same as the edit-only scale reference).
+function standIn(x, z, yaw, parcel) {
+  const g = new THREE.Group();
+  const mat = new THREE.MeshStandardMaterial({ color: 0x6c8ebf, roughness: 0.7 });
+  const box = (w, h, d, px, py, pz, m = mat) => { const b = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m); b.position.set(px, py, pz); b.castShadow = true; g.add(b); return b; };
+  box(0.95, 2, 1, -0.5, 1, 0); box(0.95, 2, 1, 0.5, 1, 0); box(2, 2, 1, 0, 3, 0);
+  box(1, 2, 1, -1.5, 2.95, 0); box(1, 2, 1, 1.5, 2.95, 0); box(1.2, 1.2, 1.2, 0, 4.6, 0);
+  if (parcel) {
+    const card = new THREE.MeshStandardMaterial({ color: 0xa9835a, roughness: 0.95 });
+    // hand ≈ bottom of the right arm (y≈1.95); twine loop 0.1 below it, box centre 0.7 below that
+    box(0.8, 0.85, 1.2, 1.5, 1.95 - 0.1 - 0.7, 0, card);
+    const tw = new THREE.MeshStandardMaterial({ color: 0xc9b48a, roughness: 1 });
+    box(0.82, 0.87, 0.05, 1.5, 1.15, 0, tw); box(0.05, 0.87, 1.22, 1.5, 1.15, 0, tw);
+  }
+  g.position.set(x, 0, z); g.rotation.y = yaw;
+  return g;
+}
+
+function ghostParcel(x, y, z, yaw) {
+  const g = new THREE.Group();
+  const b = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.85, 1.2), new THREE.MeshStandardMaterial({ color: 0xa9835a, roughness: 0.95 }));
+  b.castShadow = true; g.add(b);
+  const tw = new THREE.MeshStandardMaterial({ color: 0xc9b48a, roughness: 1 });
+  g.add(new THREE.Mesh(new THREE.BoxGeometry(0.82, 0.87, 0.05), tw));
+  g.add(new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.87, 1.22), tw));
+  g.position.set(x, y, z); g.rotation.y = yaw;
+  return g;
+}
+
+// ---------- UI (subset of Roblox layout: UDim2, AnchorPoint, AutomaticSize, UIListLayout,
+// UIPadding, UICorner, UIStroke, UIScale) ----------
+// A pure-offset UDim must stay a plain px length: calc(0% + Npx) resolves to auto inside
+// auto-height parents in CSS, which Roblox never does.
+function udim(v, s) { return v[0] === 0 ? `${v[1] * s}px` : `calc(${v[0] * 100}% + ${v[1] * s}px)`; }
+function hexA(h, t = 0) { const c = parseInt(h, 16); return `rgba(${c >> 16 & 255},${c >> 8 & 255},${c & 255},${1 - t})`; }
+const WEIGHT = { Regular: 400, Medium: 500, Bold: 700 };
+
+// overrides are keyed by path from the screen/template root, e.g. "Device/Body/Instruction"
+// Roblox AutomaticSize grows to fit children at Position 0; CSS ignores absolutely placed
+// children, so such children are laid out in flow when the parent is auto-sized.
+function renderNode(node, parentEl, s, inList, overrides, prefix = "", parentAuto = false) {
+  const path = prefix ? prefix + "/" + node.name : node.name;
+  const P = { ...node.props, ...(overrides[path] || {}) };
+  if (["UIListLayout", "UIPadding", "UICorner", "UIStroke", "UIScale"].includes(node.class)) return;
+  if (P.Visible === false) return;
+  const atOrigin = !P.Position || P.Position.every(v => v === 0);
+  if (parentAuto && atOrigin) inList = true;
+  const el = document.createElement("div");
+  el.style.position = inList ? "relative" : "absolute";
+  el.style.boxSizing = "border-box";
+  const auto = P.AutomaticSize || "None";
+  if (P.Size) {
+    el.style.width = auto === "X" || auto === "XY" ? "max-content" : udim([P.Size[0], P.Size[1]], s);
+    el.style.height = auto === "Y" || auto === "XY" ? "auto" : udim([P.Size[2], P.Size[3]], s);
+    if (auto === "X" || auto === "XY") el.style.minWidth = `${P.Size[1] * s}px`;
+    if (auto === "Y" || auto === "XY") el.style.minHeight = `${P.Size[3] * s}px`;
+  }
+  if (!inList && P.Position) {
+    el.style.left = udim([P.Position[0], P.Position[1]], s);
+    el.style.top = udim([P.Position[2], P.Position[3]], s);
+    const a = P.AnchorPoint || [0, 0];
+    el.style.transform = `translate(${-a[0] * 100}%, ${-a[1] * 100}%)` + (P.Rotation ? ` rotate(${P.Rotation}deg)` : "");
+  } else if (P.Rotation) el.style.transform = `rotate(${P.Rotation}deg)`;
+  if (inList) el.style.flex = "0 0 auto";
+  if (P.BackgroundColor3 && P.BackgroundTransparency !== undefined && P.BackgroundTransparency < 1)
+    el.style.background = hexA(P.BackgroundColor3, P.BackgroundTransparency);
+  if (P.GroupTransparency) el.style.opacity = 1 - P.GroupTransparency;
+
+  const kids = Array.isArray(node.children) ? node.children : []; // Lune encodes {} for empty
+  const corner = kids.find(k => k.class === "UICorner");
+  if (corner) el.style.borderRadius = `${corner.props.CornerRadius[1] * s}px`;
+  const stroke = kids.find(k => k.class === "UIStroke");
+  if (stroke) el.style.boxShadow = `inset 0 0 0 ${stroke.props.Thickness * s}px ${hexA(stroke.props.Color, stroke.props.Transparency)}`;
+  const pad = kids.find(k => k.class === "UIPadding");
+  if (pad) el.style.padding = `${pad.props.PaddingTop[1] * s}px ${pad.props.PaddingRight[1] * s}px ${pad.props.PaddingBottom[1] * s}px ${pad.props.PaddingLeft[1] * s}px`;
+  const listL = kids.find(k => k.class === "UIListLayout");
+  if (listL) {
+    el.style.display = "flex";
+    el.style.flexDirection = listL.props.FillDirection === "Horizontal" ? "row" : "column";
+    el.style.gap = `${listL.props.Padding[1] * s}px`;
+    const va = listL.props.VerticalAlignment, ha = listL.props.HorizontalAlignment;
+    if (listL.props.FillDirection === "Horizontal") el.style.alignItems = va === "Center" ? "center" : va === "Bottom" ? "flex-end" : "flex-start";
+    else { el.style.justifyContent = va === "Center" ? "center" : "flex-start"; if (ha === "Center") el.style.alignItems = "center"; }
+  }
+  if (P.Text !== undefined && ["TextLabel", "TextButton"].includes(node.class) && P.Text !== "") {
+    const span = document.createElement("span");
+    span.textContent = P.Text;
+    el.appendChild(span);
+    el.style.display = "flex";
+    el.style.alignItems = P.TextYAlignment === "Top" ? "flex-start" : P.TextYAlignment === "Bottom" ? "flex-end" : "center";
+    el.style.justifyContent = P.TextXAlignment === "Right" ? "flex-end" : P.TextXAlignment === "Center" ? "center" : "flex-start";
+    span.style.minWidth = "0";
+    if (P.TextTruncate === "AtEnd") { span.style.overflow = "hidden"; span.style.textOverflow = "ellipsis"; }
+    el.style.fontSize = `${P.TextSize * s}px`;
+    el.style.fontWeight = WEIGHT[P.FontWeight] || 400;
+    el.style.color = hexA(P.TextColor3, P.TextTransparency || 0);
+    el.style.lineHeight = "1.15";
+    el.style.textAlign = P.TextXAlignment === "Right" ? "right" : P.TextXAlignment === "Center" ? "center" : "left";
+    el.style.whiteSpace = P.TextWrapped ? "normal" : "nowrap";
+    if (P.TextTruncate === "AtEnd") { el.style.overflow = "hidden"; el.style.textOverflow = "ellipsis"; }
+    if (P.TextStrokeTransparency !== undefined && P.TextStrokeTransparency < 1) el.style.textShadow = `0 0 2px ${hexA(P.TextStrokeColor3, P.TextStrokeTransparency)}`;
+  }
+  parentEl.appendChild(el);
+  const ordered = [...kids].sort((a, b) => (a.props.LayoutOrder || 0) - (b.props.LayoutOrder || 0));
+  for (const k of ordered) renderNode(k, el, s, !!listL, overrides, path, !listL && auto !== "None");
+  return el;
+}
+
+function findNode(list, name) { return list.find(n => n.name === name); }
+
+window.renderView = async (cfg) => {
+  const W = cfg.width, H = cfg.height;
+  const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+  renderer.setSize(W, H);
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = cfg.exposure ?? 1.0;
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  const stage = document.getElementById("stage");
+  stage.style.width = W + "px"; stage.style.height = H + "px";
+  stage.querySelectorAll("canvas").forEach(c => c.remove());
+  stage.prepend(renderer.domElement);
+
+  const s3 = new THREE.Scene();
+  s3.background = new THREE.Color(0x050505);
+  s3.add(buildWorld(cfg));
+  for (const c of cfg.characters || []) s3.add(standIn(c.x, c.z, c.yaw, c.parcel));
+  for (const g of cfg.ghosts || []) s3.add(ghostParcel(g.x, g.y, g.z, g.yaw));
+
+  const cam = new THREE.PerspectiveCamera(70, W / H, 0.1, 500);
+  cam.position.set(...cfg.camera.pos);
+  cam.lookAt(new THREE.Vector3(...cfg.camera.look));
+  renderer.render(s3, cam);
+
+  // ----- UI overlay -----
+  const ui = document.getElementById("ui");
+  ui.innerHTML = "";
+  document.getElementById("caption").textContent = cfg.caption || "";
+  if (!cfg.hud) return;
+  const TOP = 58; // Roblox topbar height (new UI), approximate
+  const scale = Math.min(1, Math.max(0.85, H / 720));
+  // Roblox core UI mocks (positions approximate)
+  ui.insertAdjacentHTML("beforeend", `<div class="mockbtn" style="left:12px;top:7px;width:44px;height:44px"></div><div class="mockbtn" style="left:64px;top:7px;width:44px;height:44px"></div>`);
+  if (cfg.chat) ui.insertAdjacentHTML("beforeend", `<div class="mock" style="left:8px;top:${TOP + 6}px;width:${Math.min(400, W * 0.3)}px;height:${Math.min(220, H * 0.3)}px">Roblox chat window (approx. default spot)</div>`);
+  if (cfg.touch) ui.insertAdjacentHTML("beforeend",
+    `<div class="mock" style="left:40px;bottom:30px;width:140px;height:140px;border-radius:70px">thumbstick</div>` +
+    `<div class="mock" style="right:40px;bottom:40px;width:90px;height:90px;border-radius:45px">jump</div>`);
+
+  const ov = cfg.overrides || {};
+  // Topbar HUD (TopbarSafeInsets ≈ right of the core buttons, full topbar height)
+  const topbar = findNode(uiData.screens, "TopbarHUD");
+  const tb = document.createElement("div");
+  Object.assign(tb.style, { position: "absolute", left: "116px", right: "12px", top: "0px", height: TOP + "px" });
+  ui.appendChild(tb);
+  for (const k of topbar.children || []) renderNode(k, tb, 1, false, ov);
+
+  // Main HUD (CoreUISafeInsets, below the topbar), with UIScale
+  const hud = findNode(uiData.screens, "MidnightHUD");
+  const main = document.createElement("div");
+  Object.assign(main.style, { position: "absolute", left: "0px", right: "0px", top: TOP + "px", bottom: "0px" });
+  ui.appendChild(main);
+  const devW = Math.min(320, Math.floor(W * 0.42 / scale));
+  const toastW = Math.min(302, Math.floor(W * 0.8 / scale));
+  const hudOv = { ...ov, Device: { ...(ov.Device || {}), Size: [0, devW, 0, 0] }, Toast: { ...(ov.Toast || {}), Size: [0, toastW, 0, 0] } };
+  for (const k of hud.children) renderNode(k, main, scale, false, hudOv);
+
+  // Billboards at projected world points (not affected by UIScale)
+  for (const b of cfg.billboards || []) {
+    const v = new THREE.Vector3(...b.pos).project(cam);
+    if (v.z > 1) continue;
+    const x = (v.x + 1) / 2 * W, y = (1 - v.y) / 2 * H;
+    const tpl = findNode(uiData.templates, b.template);
+    const holder = document.createElement("div");
+    const sz = tpl.props.Size;
+    Object.assign(holder.style, { position: "absolute", left: (x - sz[1] / 2) + "px", top: (y - sz[3] / 2) + "px", width: sz[1] + "px", height: sz[3] + "px" });
+    ui.appendChild(holder);
+    for (const k of tpl.children) renderNode(k, holder, 1, false, b.overrides || {});
+  }
+};
+window.ready = true;
+</script>
+</body>
+</html>
