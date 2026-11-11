@@ -9,15 +9,21 @@
 		"CameraMixin",
 		"ClientPacketListenerMixin",
 		"ClientLevelMixin",
+		"ConnectionMixin",
 		"EntityMixin",
+		"EntityGlowMixin",
 		"GameRendererMixin",
 		"KeyboardInputMixin",
 		"LightTextureMixin",
 		"LevelRendererMixin",
 		"MinecraftMixin",
 		"MouseHandlerMixin",
+		"MultiPlayerGameModeMixin",
+		"NametagMixin",
+		"PlayerDigSpeedMixin",
 		"PlayerReachMixin",
-		"TextDisplayAccessor"
+		"TextDisplayAccessor",
+		"TimerMixin"
 	],
 	"injectors": {
 		"defaultRequire": 1

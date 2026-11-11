@@ -1,16 +1,26 @@
 package com.wailsvlr.prism.mixin;
 
 import com.wailsvlr.prism.modules.Freecam;
+import com.wailsvlr.prism.modules.FastPlace;
+import com.wailsvlr.prism.modules.FastBreak;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.multiplayer.MultiPlayerGameMode;
 import org.spongepowered.asm.mixin.Mixin;
+import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
-/** Freecam: unless "Allow Interaction" is on, clicks do not break or use blocks where the real player is aiming. */
 @Mixin(Minecraft.class)
 public class MinecraftMixin {
+    @Shadow private int rightClickDelay;
+
+    @Inject(method = "tick", at = @At("HEAD"))
+    private void prism$fastPlace(CallbackInfo ci) {
+        if (FastPlace.isActive()) rightClickDelay = 0;
+    }
+
 	private static boolean prism$blocked() {
 		Freecam fc = Freecam.active();
 		return fc != null && !fc.allowsInteraction();
