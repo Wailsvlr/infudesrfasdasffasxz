@@ -5,6 +5,7 @@ import java.awt.event.*;
 import java.awt.geom.*;
 import java.io.*;
 import java.nio.file.*;
+import java.net.URI;
 import java.util.*;
 import java.util.List;
 
@@ -841,18 +842,18 @@ public class LimpInjector {
 
         if (os.contains("win")) {
             String appdata = System.getenv("APPDATA");
-            if (appdata != null) candidates.add(Path.of(appdata, ".minecraft"));
+            if (appdata != null) candidates.add(Paths.get(appdata, ".minecraft"));
             // Common launcher locations
-            candidates.add(Path.of(home, "curseforge", "minecraft", "Instances"));
-            candidates.add(Path.of(home, "AppData", "Roaming", ".minecraft"));
+            candidates.add(Paths.get(home, "curseforge", "minecraft", "Instances"));
+            candidates.add(Paths.get(home, "AppData", "Roaming", ".minecraft"));
             // MultiMC / Prism Launcher instances
-            candidates.add(Path.of(home, "AppData", "Roaming", "PrismLauncher", "instances"));
-            candidates.add(Path.of(home, "AppData", "Local", "MultiMC", "instances"));
+            candidates.add(Paths.get(home, "AppData", "Roaming", "PrismLauncher", "instances"));
+            candidates.add(Paths.get(home, "AppData", "Local", "MultiMC", "instances"));
         } else if (os.contains("mac")) {
-            candidates.add(Path.of(home, "Library", "Application Support", "minecraft"));
+            candidates.add(Paths.get(home, "Library", "Application Support", "minecraft"));
         } else {
-            candidates.add(Path.of(home, ".minecraft"));
-            candidates.add(Path.of(home, ".local", "share", "PrismLauncher", "instances"));
+            candidates.add(Paths.get(home, ".minecraft"));
+            candidates.add(Paths.get(home, ".local", "share", "PrismLauncher", "instances"));
         }
 
         Set<String> seen = new HashSet<>();
@@ -939,7 +940,8 @@ public class LimpInjector {
 
         // Check next to the injector
         try {
-            Path self = Path.of(LimpInjector.class.getProtectionDomain().getCodeSource().getLocation().toURI());
+            URI loc = LimpInjector.class.getProtectionDomain().getCodeSource().getLocation().toURI();
+            Path self = Paths.get(loc);
             Path dir = self.getParent();
             if (dir != null) {
                 Path candidate = dir.resolve(MOD_JAR);
@@ -947,12 +949,12 @@ public class LimpInjector {
             }
         } catch (Exception ignored) {}
 
-        Path cwd = Path.of(MOD_JAR);
+        Path cwd = Paths.get(MOD_JAR);
         if (Files.exists(cwd)) return cwd;
 
         String home = System.getProperty("user.home");
         for (String sub : new String[]{"Downloads", "Desktop", "Belgeler", "İndirilenler"}) {
-            Path p = Path.of(home, sub, MOD_JAR);
+            Path p = Paths.get(home, sub, MOD_JAR);
             if (Files.exists(p)) return p;
         }
         return null;

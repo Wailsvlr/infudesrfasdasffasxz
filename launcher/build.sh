@@ -2,7 +2,7 @@
 set -e
 cd "$(dirname "$0")"
 mkdir -p out
-javac --release 17 -d out src/LimpInjector.java
+javac --release 8 -d out src/LimpInjector.java
 # Embed the mod JAR as a resource inside the launcher JAR
 cp resources/legitclient-1.0.0.jar out/
 cd out
