@@ -1,0 +1,28 @@
+{
+	"schemaVersion": 1,
+	"id": "prismclient",
+	"version": "1.0.0",
+	"name": "Prism Client",
+	"description": "Client-side utility mod: ClickGUI, StorageFinder and SpawnerFinder.",
+	"authors": ["Wailsvlr"],
+	"license": "All-Rights-Reserved",
+	"icon": "assets/prismclient/icon.png",
+	"environment": "client",
+	"entrypoints": {
+		"client": [
+			"com.wailsvlr.prism.PrismClient"
+		]
+	},
+	"mixins": [
+		{
+			"config": "prismclient.client.mixins.json",
+			"environment": "client"
+		}
+	],
+	"depends": {
+		"fabricloader": ">=0.16.0",
+		"minecraft": "~1.21.11",
+		"java": ">=21",
+		"fabric-api": "*"
+	}
+}

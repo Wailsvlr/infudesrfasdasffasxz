@@ -1,0 +1,69 @@
+plugins {
+	id 'net.fabricmc.fabric-loom-remap' version "${loom_version}"
+}
+
+base {
+	archivesName = 'legitclient'
+}
+
+loom {
+	splitEnvironmentSourceSets()
+
+	mods {
+		"prismclient" {
+			sourceSet sourceSets.main
+			sourceSet sourceSets.client
+		}
+	}
+}
+
+// Client game tests (Fabric API): open a real client, create a world, place blocks,
+// check what the modules find and take screenshots of the GUI and the highlights.
+fabricApi {
+	configureTests {
+		createSourceSet = true
+		modId = "prismclient-test"
+		eula = true
+		enableGameTests = false
+		enableClientGameTests = true
+	}
+}
+
+dependencies {
+	minecraft "com.mojang:minecraft:${project.minecraft_version}"
+	mappings loom.officialMojangMappings()
+	modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
+	modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
+}
+
+processResources {
+	def version = project.version
+	inputs.property "version", version
+	filesMatching("fabric.mod.json") {
+		expand "version": version
+	}
+}
+
+tasks.withType(JavaCompile).configureEach {
+	it.options.release = 21
+	it.options.encoding = 'UTF-8'
+}
+
+java {
+	sourceCompatibility = JavaVersion.VERSION_21
+	targetCompatibility = JavaVersion.VERSION_21
+}
+
+// profiling: gradlew runClientGameTest -Pprofile
+if (project.hasProperty('profile')) {
+	tasks.matching { it.name == 'runClientGameTest' }.configureEach {
+		jvmArgs "-XX:StartFlightRecording=filename=${project.file('build/prism-profile.jfr').absolutePath},settings=profile"
+	}
+}
+
+// The test framework's packet synchronizer trips when the test opens a chest by right click (BaseValue's learning
+// check); its own error message says to switch it off for such tests. Test runs only.
+tasks.matching { it.name == 'runClientGameTest' }.configureEach {
+	jvmArgs "-Dfabric.client.gametest.disableNetworkSynchronizer=true"
+	if (project.hasProperty('prismOnly')) jvmArgs "-Dprism.only=${project.property('prismOnly')}"
+}

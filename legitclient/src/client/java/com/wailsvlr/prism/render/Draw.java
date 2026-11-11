@@ -1,0 +1,242 @@
+package com.wailsvlr.prism.render;
+
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.Font;
+import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.client.renderer.RenderPipelines;
+import net.minecraft.client.renderer.texture.DynamicTexture;
+import net.minecraft.resources.Identifier;
+import com.mojang.blaze3d.platform.NativeImage;
+
+import java.util.HashMap;
+import java.util.Map;
+
+/**
+ * 2D drawing helpers for the GUI. Rounded shapes are drawn in physical pixels (the pose is scaled down by the GUI
+ * scale) with anti-aliased corner textures, so corners look smooth at any GUI scale and cost a handful of quads.
+ */
+public final class Draw {
+	private Draw() { }
+
+	private static float scale() { return (float) Minecraft.getInstance().getWindow().getGuiScale(); }
+
+	public static void rect(GuiGraphics g, float x, float y, float w, float h, int argb) {
+		if (w <= 0 || h <= 0 || (argb >>> 24) == 0) return;
+		float s = scale();
+		g.pose().pushMatrix();
+		g.pose().scale(1 / s, 1 / s);
+		int x0 = Math.round(x * s), y0 = Math.round(y * s), x1 = Math.round((x + w) * s), y1 = Math.round((y + h) * s);
+		if (x1 > x0 && y1 > y0) g.fill(x0, y0, x1, y1, argb);
+		g.pose().popMatrix();
+	}
+
+	/**
+	 * Anti-aliased circle textures, one per radius in physical pixels, made on first use. A rounded rectangle is then
+	 * four corner quads cut from the circle plus three plain fills, instead of one fill per pixel row.
+	 */
+	private static final Map<Integer, Identifier> CIRCLES = new HashMap<>();
+	private static final int MAX_TEXTURE_RADIUS = 256;
+
+	private static Identifier circle(int r) {
+		return CIRCLES.computeIfAbsent(r, R -> {
+			NativeImage img = new NativeImage(2 * R, 2 * R, true);
+			int ss = 4;   // 4x4 samples per pixel
+			for (int py = 0; py < 2 * R; py++) {
+				for (int px = 0; px < 2 * R; px++) {
+					int inside = 0;
+					for (int sy = 0; sy < ss; sy++) {
+						for (int sx = 0; sx < ss; sx++) {
+							double dx = px + (sx + 0.5) / ss - R, dy = py + (sy + 0.5) / ss - R;
+							if (dx * dx + dy * dy <= R * (double) R) inside++;
+						}
+					}
+					img.setPixel(px, py, (Math.round(255f * inside / (ss * ss)) << 24) | 0xFFFFFF);
+				}
+			}
+			Identifier id = Identifier.fromNamespaceAndPath("prismclient", "dynamic/circle_" + R);
+			Minecraft.getInstance().getTextureManager().register(id, new DynamicTexture(() -> "prismclient circle " + R, img));
+			return id;
+		});
+	}
+
+	/** Rounded rectangle with anti-aliased corners. {@code r} is in GUI units. */
+	public static void round(GuiGraphics g, float x, float y, float w, float h, float r, int argb) {
+		roundCorners(g, x, y, w, h, r, argb, true, true, true, true);
+	}
+
+	public static void roundCorners(GuiGraphics g, float x, float y, float w, float h, float r, int argb,
+									boolean tl, boolean tr, boolean bl, boolean br) {
+		if (w <= 0 || h <= 0 || (argb >>> 24) == 0) return;
+		float s = scale();
+		int X = Math.round(x * s), Y = Math.round(y * s), W = Math.round((x + w) * s) - X, H = Math.round((y + h) * s) - Y;
+		if (W <= 0 || H <= 0) return;
+		int R = Math.min(Math.min(Math.round(r * s), Math.min(W, H) / 2), MAX_TEXTURE_RADIUS);
+		g.pose().pushMatrix();
+		g.pose().scale(1 / s, 1 / s);
+		if (R <= 0) {
+			g.fill(X, Y, X + W, Y + H, argb);
+			g.pose().popMatrix();
+			return;
+		}
+		Identifier tex = circle(R);
+		g.fill(X + R, Y, X + W - R, Y + H, argb);              // centre column, full height
+		g.fill(X, Y + R, X + R, Y + H - R, argb);              // left band between the corners
+		g.fill(X + W - R, Y + R, X + W, Y + H - R, argb);      // right band
+		corner(g, tex, R, X, Y, 0, 0, tl, argb);
+		corner(g, tex, R, X + W - R, Y, R, 0, tr, argb);
+		corner(g, tex, R, X, Y + H - R, 0, R, bl, argb);
+		corner(g, tex, R, X + W - R, Y + H - R, R, R, br, argb);
+		g.pose().popMatrix();
+	}
+
+	private static void corner(GuiGraphics g, Identifier tex, int R, int x, int y, int u, int v, boolean rounded, int argb) {
+		if (rounded) g.blit(RenderPipelines.GUI_TEXTURED, tex, x, y, u, v, R, R, 2 * R, 2 * R, argb);
+		else g.fill(x, y, x + R, y + R, argb);
+	}
+
+	/** Rounded rectangle outline of thickness {@code t} (GUI units). */
+	public static void roundOutline(GuiGraphics g, float x, float y, float w, float h, float r, float t, int argb, int inside) {
+		round(g, x, y, w, h, r, argb);
+		round(g, x + t, y + t, w - 2 * t, h - 2 * t, Math.max(0, r - t), inside);
+	}
+
+	/** Horizontal gradient in at most 32 bands (fine enough for the short bars it is used for). */
+	public static void hGradient(GuiGraphics g, float x, float y, float w, float h, int left, int right) {
+		float s = scale();
+		int X = Math.round(x * s), Y = Math.round(y * s), W = Math.round((x + w) * s) - X, H = Math.round((y + h) * s) - Y;
+		if (W <= 0 || H <= 0) return;
+		g.pose().pushMatrix();
+		g.pose().scale(1 / s, 1 / s);
+		int bands = Math.min(W, 32);
+		for (int i = 0; i < bands; i++) {
+			int x0 = X + W * i / bands, x1 = X + W * (i + 1) / bands;
+			if (x1 > x0) g.fill(x0, Y, x1, Y + H, lerp(left, right, bands == 1 ? 0 : i / (float) (bands - 1)));
+		}
+		g.pose().popMatrix();
+	}
+
+	/** The colour picker's saturation (left to right) / brightness (top to bottom) square, one screen pixel per column. */
+	public static void svSquare(GuiGraphics g, float x, float y, float w, float h, float hue, int alpha) {
+		float s = scale();
+		int X = Math.round(x * s), Y = Math.round(y * s), W = Math.round((x + w) * s) - X, H = Math.round((y + h) * s) - Y;
+		if (W <= 0 || H <= 0) return;
+		g.pose().pushMatrix();
+		g.pose().scale(1 / s, 1 / s);
+		for (int i = 0; i < W; i++) {
+			int top = alpha << 24 | com.wailsvlr.prism.util.ColorUtil.hsbToRgb(hue, W == 1 ? 1 : i / (float) (W - 1), 1f);
+			g.fillGradient(X + i, Y, X + i + 1, Y + H, top, alpha << 24);
+		}
+		g.pose().popMatrix();
+	}
+
+	/** Rounded horizontal gradient (gradient bar with rounded ends). */
+	public static void roundGradient(GuiGraphics g, float x, float y, float w, float h, float r, int left, int right) {
+		float s = scale();
+		int X = Math.round(x * s), Y = Math.round(y * s), W = Math.round((x + w) * s) - X, H = Math.round((y + h) * s) - Y;
+		if (W <= 0 || H <= 0) return;
+		int R = Math.min(Math.min(Math.round(r * s), Math.min(W, H) / 2), MAX_TEXTURE_RADIUS);
+		if (R <= 0) { hGradient(g, x, y, w, h, left, right); return; }
+		g.pose().pushMatrix();
+		g.pose().scale(1 / s, 1 / s);
+		Identifier tex = circle(R);
+		// end caps in the end colours, the gradient between them
+		corner(g, tex, R, X, Y, 0, 0, true, left);
+		corner(g, tex, R, X, Y + H - R, 0, R, true, left);
+		if (H > 2 * R) g.fill(X, Y + R, X + R, Y + H - R, left);
+		corner(g, tex, R, X + W - R, Y, R, 0, true, right);
+		corner(g, tex, R, X + W - R, Y + H - R, R, R, true, right);
+		if (H > 2 * R) g.fill(X + W - R, Y + R, X + W, Y + H - R, right);
+		g.pose().popMatrix();
+		if (W > 2 * R) hGradient(g, (X + R) / s, y, (W - 2 * R) / s, h, left, right);
+	}
+
+	/** Soft shadow: a few stacked translucent rounded rects. */
+	public static void shadow(GuiGraphics g, float x, float y, float w, float h, float r, float size, int alpha) {
+		int steps = 3;
+		for (int i = steps; i >= 1; i--) {
+			float o = size * i / steps;
+			int a = Math.round(alpha * (1f - (float) i / (steps + 1)) / steps);
+			round(g, x - o, y - o + size * 0.35f, w + 2 * o, h + 2 * o, r + o, a << 24);
+		}
+	}
+
+	public static void circle(GuiGraphics g, float cx, float cy, float radius, int argb) {
+		round(g, cx - radius, cy - radius, radius * 2, radius * 2, radius, argb);
+	}
+
+	/** Prism's smooth UI font (Inter, assets/prismclient/font/ui.json); used while {@link #smooth} is on. */
+	public static final net.minecraft.network.chat.FontDescription UI_FONT =
+		new net.minecraft.network.chat.FontDescription.Resource(net.minecraft.resources.Identifier.fromNamespaceAndPath("prismclient", "ui"));
+	/** Set every frame from the ClickGUI "Font" setting. */
+	public static boolean smooth;
+
+	/** The component in the UI font (when on); the game's font otherwise. */
+	public static net.minecraft.network.chat.Component styled(net.minecraft.network.chat.Component c) {
+		return smooth ? c.copy().withStyle(st -> st.withFont(UI_FONT)) : c;
+	}
+
+	private static net.minecraft.network.chat.Component styled(String s) {
+		return styled(net.minecraft.network.chat.Component.literal(s));
+	}
+
+	public static void text(GuiGraphics g, String s, float x, float y, int argb) {
+		Font f = Minecraft.getInstance().font;
+		g.pose().pushMatrix();
+		g.pose().translate(x, y);
+		if (smooth) g.drawString(f, styled(s), 0, 0, argb, false);
+		else g.drawString(f, s, 0, 0, argb, false);
+		g.pose().popMatrix();
+	}
+
+	public static void textShadow(GuiGraphics g, String s, float x, float y, int argb) {
+		Font f = Minecraft.getInstance().font;
+		g.pose().pushMatrix();
+		g.pose().translate(x, y);
+		if (smooth) g.drawString(f, styled(s), 0, 0, argb, true);
+		else g.drawString(f, s, 0, 0, argb, true);
+		g.pose().popMatrix();
+	}
+
+	public static void textScaled(GuiGraphics g, String s, float x, float y, float scale, int argb, boolean shadow) {
+		Font f = Minecraft.getInstance().font;
+		g.pose().pushMatrix();
+		g.pose().translate(x, y);
+		g.pose().scale(scale, scale);
+		if (smooth) g.drawString(f, styled(s), 0, 0, argb, shadow);
+		else g.drawString(f, s, 0, 0, argb, shadow);
+		g.pose().popMatrix();
+	}
+
+	/**
+	 * One of Prism's line icons (assets/prismclient/textures/gui/icons/&lt;name&gt;.png, 32 px, white, smooth filtering)
+	 * drawn {@code size} GUI pixels square, tinted with {@code argb}.
+	 */
+	public static void icon(GuiGraphics g, String name, float x, float y, float size, int argb) {
+		net.minecraft.resources.Identifier id = net.minecraft.resources.Identifier.fromNamespaceAndPath("prismclient", "textures/gui/icons/" + name + ".png");
+		g.pose().pushMatrix();
+		g.pose().translate(x, y);
+		g.pose().scale(size / 32f, size / 32f);
+		g.blit(net.minecraft.client.renderer.RenderPipelines.GUI_TEXTURED, id, 0, 0, 0f, 0f, 32, 32, 32, 32, argb);
+		g.pose().popMatrix();
+	}
+
+	public static int width(String s) {
+		Font f = Minecraft.getInstance().font;
+		return smooth ? f.width(styled(s)) : f.width(s);
+	}
+
+	/** "LEGIT" with a colour per letter, as one component: the font spaces the letters (no rounding drift). Bold only in the pixel font. */
+	public static net.minecraft.network.chat.Component word(String s, java.util.function.IntUnaryOperator colorOfLetter) {
+		net.minecraft.network.chat.MutableComponent out = net.minecraft.network.chat.Component.empty();
+		for (int i = 0; i < s.length(); i++) {
+			int col = colorOfLetter.applyAsInt(i) & 0xFFFFFF;
+			out.append(net.minecraft.network.chat.Component.literal(s.substring(i, i + 1))
+				.withStyle(st -> st.withColor(col).withBold(!smooth)));
+		}
+		return styled(out);
+	}
+
+	public static int width(net.minecraft.network.chat.Component c) { return Minecraft.getInstance().font.width(styled(c)); }
+
+	public static int lerp(int c1, int c2, float t) { return com.wailsvlr.prism.util.ColorUtil.lerp(c1, c2, t); }
+}

@@ -1,0 +1,163 @@
+package com.wailsvlr.prism.modules;
+
+import com.wailsvlr.prism.render.Highlight;
+import com.wailsvlr.prism.render.HighlightStyle;
+import com.wailsvlr.prism.setting.BoolSetting;
+import com.wailsvlr.prism.setting.ColorSetting;
+import com.wailsvlr.prism.setting.ModeSetting;
+import com.wailsvlr.prism.setting.SectionSetting;
+import com.wailsvlr.prism.setting.TextSetting;
+import net.minecraft.ChatFormatting;
+import net.minecraft.client.multiplayer.ClientLevel;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.network.chat.Component;
+import net.minecraft.sounds.SoundEvents;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.decoration.ItemFrame;
+import net.minecraft.world.entity.item.ItemEntity;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.phys.AABB;
+import net.minecraft.world.phys.Vec3;
+
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
+
+/** Highlights dropped items and items in item frames, with "Diamond ×3 12m" labels. */
+public class ItemFinder extends FinderModule {
+	/** Items worth stopping for (matched against the item id). Enchanted items always count. */
+	private static final String[] VALUABLE = {"diamond", "netherite", "ancient_debris", "elytra", "totem_of_undying", "golden_apple",
+		"shulker_box", "beacon", "nether_star", "enchanted_book", "trident", "mace", "heavy_core", "dragon_egg", "dragon_head",
+		"end_crystal", "emerald", "music_disc", "trial_key", "ominous_trial_key", "wither_skeleton_skull", "sniffer_egg"};
+
+	private final BoolSetting dropped, frames, rarityColor, notify, notifySound, hudCount;
+	private final ModeSetting show;
+	private final TextSetting list;
+	private final ColorSetting color;
+
+	private volatile List<Target> targets = List.of();
+	private final Set<Integer> announced = new HashSet<>();
+	private ClientLevel lastLevel;
+
+	public record Target(String name, int count, double distance, boolean framed) { }
+
+	public ItemFinder() {
+		super("ItemFinder", "Highlights items on the ground and in item frames, with their name and amount");
+		add(new SectionSetting("Items"));
+		dropped = add(new BoolSetting("Dropped Items", "Items lying on the ground", true));
+		frames = add(new BoolSetting("Item Frames", "Items in item frames (bases often have them)", true));
+		show = add(new ModeSetting("Show", "All: every item. Valuable: diamonds, netherite, elytras, totems, shulkers, enchanted gear and your list. List Only: just the list",
+			"Valuable", "All", "Valuable", "List Only"));
+		list = add(new TextSetting("Item List", "Item ids or parts of them, separated by commas (e.g. diamond, elytra, golden_apple)",
+			"", "e.g. elytra, golden_apple, pearl")).visibleWhen(() -> !show.is("All"));
+
+		addLookSettings("Both", 25);
+
+		add(new SectionSetting("Colors"));
+		rarityColor = add(new BoolSetting("Color By Rarity", "Colour by item rarity (white, yellow, aqua, purple) like the tooltip", true));
+		color = add(new ColorSetting("Item Color", "Colour of item highlights", 0xFF7CFFB2)).visibleWhen(() -> !rarityColor.isOn());
+
+		addExtraSettings(96, false, true);
+		notify = add(new BoolSetting("Notify", "Chat message when a matching item shows up", false));
+		notifySound = add(new BoolSetting("Notify Sound", "Play a ping with the message", true)).visibleWhen(notify::isOn);
+		hudCount = add(new BoolSetting("HUD Counter", "Show the number of items in the HUD", true));
+	}
+
+	@Override
+	protected void onEnable() { announced.clear(); }
+
+	@Override
+	protected void onDisable() { targets = List.of(); }
+
+	private boolean wanted(ItemStack stack) {
+		if (stack.isEmpty()) return false;
+		if (show.is("All")) return true;
+		String id = BuiltInRegistries.ITEM.getKey(stack.getItem()).toString();
+		for (String part : list.ids()) {
+			String bare = part.startsWith("minecraft:") ? part.substring(10) : part;
+			if (id.equals(part) || id.contains(bare)) return true;
+		}
+		if (show.is("List Only")) return false;
+		if (stack.isEnchanted()) return true;
+		for (String v : VALUABLE) if (id.contains(v)) return true;
+		return false;
+	}
+
+	private record Seen(Entity entity, ItemStack stack, boolean framed) { }
+
+	private List<Seen> scan() {
+		List<Seen> out = new ArrayList<>();
+		if (mc.level == null || mc.player == null) return out;
+		double r2 = range.get() * range.get();
+		for (Entity e : mc.level.entitiesForRendering()) {
+			if (e.isRemoved() || e.distanceToSqr(mc.player) > r2) continue;
+			if (e instanceof ItemEntity item && dropped.isOn() && wanted(item.getItem())) out.add(new Seen(e, item.getItem(), false));
+			else if (e instanceof ItemFrame frame && frames.isOn() && wanted(frame.getItem())) out.add(new Seen(e, frame.getItem(), true));
+		}
+		return out;
+	}
+
+	@Override
+	public void onTick() {
+		if (mc.level == null || mc.player == null) return;
+		if (mc.level != lastLevel) { lastLevel = mc.level; announced.clear(); }
+		List<Target> list = new ArrayList<>();
+		Seen near = null;
+		double nd = Double.MAX_VALUE;
+		for (Seen s : scan()) {
+			double d = Math.sqrt(s.entity().distanceToSqr(mc.player));
+			if (d < nd) { nd = d; near = s; }
+			list.add(new Target(s.stack().getHoverName().getString(), s.stack().getCount(), d, s.framed()));
+			if (notify.isOn() && announced.add(s.entity().getId())) announce(s, d);
+		}
+		list.sort(Comparator.comparingDouble(Target::distance));
+		targets = list;
+		if (near == null) nearest(null, null, 0);
+		else nearest(near.entity().position().add(0, 0.25, 0), near.stack().getHoverName().getString(), colorOf(near.stack(), near.entity()));
+	}
+
+	@Override
+	protected boolean hasAlerts() { return notify.isOn(); }
+
+	private void announce(Seen s, double d) {
+		Component msg = Component.literal("[Legit] ").withStyle(ChatFormatting.LIGHT_PURPLE)
+			.append(Component.literal(s.stack().getHoverName().getString() + " ×" + s.stack().getCount()).withStyle(ChatFormatting.AQUA))
+			.append(Component.literal((s.framed() ? " in an item frame at " : " on the ground at ")).withStyle(ChatFormatting.WHITE))
+			.append(Component.literal(s.entity().getBlockX() + " " + s.entity().getBlockY() + " " + s.entity().getBlockZ()).withStyle(ChatFormatting.AQUA))
+			.append(Component.literal(" (" + Math.round(d) + "m)").withStyle(ChatFormatting.GRAY));
+		mc.gui.getChat().addMessage(msg);
+		card(s.entity().getId(), s.stack().getHoverName().getString() + " \u00D7" + s.stack().getCount() + " (" + Math.round(d) + "m)");
+		if (notifySound.isOn()) mc.player.playSound(SoundEvents.EXPERIENCE_ORB_PICKUP, 0.6f, 1.8f);
+	}
+
+	private int colorOf(ItemStack stack, Entity e) {
+		if (!rarityColor.isOn()) return color.rgb(e.getId() * 0.37f);
+		Integer c = stack.getRarity().color().getColor();
+		return c == null ? 0xFFFFFF : c;
+	}
+
+	public void collect(List<Highlight> out) {
+		if (!isEnabled() || mc.player == null) return;
+		HighlightStyle st = style();
+		float partial = mc.getDeltaTracker().getGameTimeDeltaPartialTick(false);
+		Vec3 me = mc.player.getPosition(partial);
+		for (Seen s : scan()) {
+			Entity e = s.entity();
+			// items fall and slide: follow the smooth position, and make the tiny item box easier to see
+			Vec3 pos = e.getPosition(partial);
+			AABB box = e.getBoundingBox().move(pos.subtract(e.position())).inflate(s.framed() ? 0 : 0.1);
+			String label = null;
+			if (labels.isOn()) {
+				label = s.stack().getHoverName().getString() + (s.stack().getCount() > 1 ? " ×" + s.stack().getCount() : "");
+				if (labelDistance.isOn()) label += " " + Math.round(pos.distanceTo(me)) + "m";
+			}
+			out.add(new Highlight(box, colorOf(s.stack(), e), st, label));
+		}
+	}
+
+	public List<Target> targets() { return targets; }
+	public boolean showHudCount() { return hudCount.isOn(); }
+	public TextSetting itemList() { return list; }
+}

@@ -1,0 +1,25 @@
+{
+	"required": true,
+	"package": "com.wailsvlr.prism.mixin",
+	"compatibilityLevel": "JAVA_21",
+	"client": [
+		"AbstractContainerScreenAccessor",
+		"AbstractContainerScreenMixin",
+		"CrafterScreenMixin",
+		"CameraMixin",
+		"ClientPacketListenerMixin",
+		"ClientLevelMixin",
+		"EntityMixin",
+		"GameRendererMixin",
+		"KeyboardInputMixin",
+		"LightTextureMixin",
+		"LevelRendererMixin",
+		"MinecraftMixin",
+		"MouseHandlerMixin",
+		"PlayerReachMixin",
+		"TextDisplayAccessor"
+	],
+	"injectors": {
+		"defaultRequire": 1
+	}
+}

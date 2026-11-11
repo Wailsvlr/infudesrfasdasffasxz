@@ -1,0 +1,132 @@
+package com.wailsvlr.prism.modules;
+
+import com.wailsvlr.prism.module.Category;
+import com.wailsvlr.prism.module.Module;
+import com.wailsvlr.prism.setting.BoolSetting;
+import com.wailsvlr.prism.setting.NumberSetting;
+import com.wailsvlr.prism.setting.SectionSetting;
+import net.minecraft.client.DeltaTracker;
+import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.world.entity.EquipmentSlot;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.phys.EntityHitResult;
+import net.minecraft.world.phys.Vec3;
+
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * Shows the armour (and held items) of the player you look at, with each piece's durability, above the hotbar.
+ * Information only: it reads the equipment the server already sends for drawing the player. Servers that hide
+ * durability (Paper's hide-durability) send every piece as undamaged, so it then shows 100%.
+ */
+public class ArmorView extends Module {
+	private static final EquipmentSlot[] ARMOR = {EquipmentSlot.HEAD, EquipmentSlot.CHEST, EquipmentSlot.LEGS, EquipmentSlot.FEET};
+
+	private final NumberSetting range, low;
+	private final BoolSetting hands, warning;
+
+	private Player target;
+	private long seenAt;
+
+	public ArmorView() {
+		super("ArmorView", "Shows the armour of the player you look at, with how much durability each piece has left", Category.COMBAT);
+		add(new SectionSetting("Target"));
+		range = add(new NumberSetting("Range", "Players farther away than this are not shown", 48, 8, 128, 4, " m"));
+		add(new SectionSetting("Show"));
+		hands = add(new BoolSetting("Held Items", "Also show what they hold (weapon, totem, shield...)", true));
+		low = add(new NumberSetting("Low At", "Pieces with this much durability or less turn red", 25, 5, 60, 5, "%"));
+		warning = add(new BoolSetting("Low Warning", "A red line naming the pieces about to break", true));
+	}
+
+	@Override
+	protected void onDisable() { target = null; }
+
+	@Override
+	public void onTick() {
+		if (mc.player == null || mc.level == null) { target = null; return; }
+		Player seen = pick();
+		long now = System.currentTimeMillis();
+		if (seen != null) { target = seen; seenAt = now; }
+		else if (target != null && (now - seenAt > 3000 || target.isRemoved() || target.distanceTo(mc.player) > range.get() * 1.5)) target = null;
+	}
+
+	/** The player under the crosshair, else the one closest to it (within 8 degrees and the range). */
+	private Player pick() {
+		if (mc.hitResult instanceof EntityHitResult hit && hit.getEntity() instanceof Player p && p != mc.player) return p;
+		Vec3 eye = mc.player.getEyePosition(), look = mc.player.getViewVector(1f);
+		Player best = null;
+		double bestCos = Math.cos(Math.toRadians(8));
+		for (Player p : mc.level.players()) {
+			if (p == mc.player || p.isSpectator() || p.distanceTo(mc.player) > range.get()) continue;
+			Vec3 to = p.getBoundingBox().getCenter().subtract(eye).normalize();
+			double cos = to.dot(look);
+			if (cos > bestCos) { bestCos = cos; best = p; }
+		}
+		return best;
+	}
+
+	public Player target() { return target; }
+
+	/** Durability left in percent (0-100), or -1 when the item has no durability (or the slot is empty). */
+	public static int percent(ItemStack s) {
+		if (s.isEmpty() || !s.isDamageableItem() || s.getMaxDamage() <= 0) return -1;
+		return (int) Math.round(100.0 * (s.getMaxDamage() - s.getDamageValue()) / s.getMaxDamage());
+	}
+
+	/** "HEAD 100%", "CHEST 40%", "FEET -" for the target (for tests and the warning line). */
+	public List<String> describe() {
+		List<String> out = new ArrayList<>();
+		if (target == null) return out;
+		for (EquipmentSlot slot : ARMOR) {
+			ItemStack s = target.getItemBySlot(slot);
+			int p = percent(s);
+			out.add(slot.name() + " " + (s.isEmpty() ? "-" : p < 0 ? "no durability" : p + "%"));
+		}
+		return out;
+	}
+
+	private int color(int percent) {
+		if (percent < 0) return 0xFFFFFFFF;
+		if (percent <= low.get()) return 0xFFFF4D4D;
+		if (percent < 60) return 0xFFFFD43B;
+		return 0xFF7CFF8A;
+	}
+
+	public void render(GuiGraphics g, DeltaTracker delta) {
+		Player t = target;
+		if (!isEnabled() || t == null || mc.player == null || mc.options.hideGui) return;
+		List<ItemStack> items = new ArrayList<>();
+		for (EquipmentSlot slot : ARMOR) items.add(t.getItemBySlot(slot));
+		if (hands.isOn()) { items.add(t.getMainHandItem()); items.add(t.getOffhandItem()); }
+		int cell = 28, w = items.size() * cell + 8, h = 46;
+		// above the hotbar and hearts, so the player you fight stays in view
+		int x = g.guiWidth() / 2 - w / 2, y = g.guiHeight() - 56 - h;
+		g.fill(x, y, x + w, y + h, 0x90000000);
+		String name = t.getName().getString() + "  " + Math.round(t.getHealth() + t.getAbsorptionAmount()) + "❤  " + Math.round(t.distanceTo(mc.player)) + "m";
+		g.drawString(mc.font, name, x + w / 2 - mc.font.width(name) / 2, y + 3, 0xFFFFFFFF, true);
+		List<String> lowParts = new ArrayList<>();
+		for (int i = 0; i < items.size(); i++) {
+			ItemStack s = items.get(i);
+			int cx = x + 4 + i * cell + 6, cy = y + 14;
+			if (i == 4) g.fill(cx - 4, cy, cx - 3, cy + 28, 0x60FFFFFF);   // armour | hands
+			if (s.isEmpty()) {
+				g.drawString(mc.font, "-", cx + 6, cy + 4, 0xFF888888, true);
+				continue;
+			}
+			g.renderItem(s, cx, cy);
+			g.renderItemDecorations(mc.font, s, cx, cy);
+			int p = percent(s);
+			if (p >= 0) {
+				String txt = p + "%";
+				g.drawString(mc.font, txt, cx + 8 - mc.font.width(txt) / 2, cy + 19, color(p), true);
+				if (i < 4 && p <= low.get()) lowParts.add(s.getHoverName().getString() + " " + p + "%");
+			}
+		}
+		if (warning.isOn() && !lowParts.isEmpty()) {
+			String warn = "LOW: " + String.join(", ", lowParts);
+			g.drawString(mc.font, warn, g.guiWidth() / 2 - mc.font.width(warn) / 2, y - 11, 0xFFFF4D4D, true);
+		}
+	}
+}

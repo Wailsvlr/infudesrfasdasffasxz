@@ -1,0 +1,804 @@
+package com.wailsvlr.prism.gui;
+
+import com.wailsvlr.prism.PrismClient;
+import com.wailsvlr.prism.module.Module;
+import com.wailsvlr.prism.modules.BaseHunter;
+import com.wailsvlr.prism.modules.BlockFinder;
+import com.wailsvlr.prism.modules.ClickGuiModule;
+import com.wailsvlr.prism.modules.ItemFinder;
+import com.wailsvlr.prism.modules.HudModule;
+import com.wailsvlr.prism.modules.OreFinder;
+import com.wailsvlr.prism.modules.PlayerFinder;
+import com.wailsvlr.prism.modules.SpawnerFinder;
+import com.wailsvlr.prism.modules.StorageFinder;
+import com.wailsvlr.prism.render.Draw;
+import com.wailsvlr.prism.render.EspRenderer;
+import com.wailsvlr.prism.render.Highlight;
+import com.wailsvlr.prism.render.Projection;
+import com.wailsvlr.prism.util.ColorUtil;
+import net.minecraft.ChatFormatting;
+import net.minecraft.client.DeltaTracker;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.network.chat.Component;
+import net.minecraft.world.phys.Vec3;
+
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Map;
+
+public final class PrismHud {
+	private PrismHud() { }
+
+	private static final int MAX_LABELS = 48;
+
+	/** Boxes the HUD drew this frame; block labels keep out of them. */
+	private static final List<float[]> HUD_BOXES = new ArrayList<>();
+
+	// ---- movable elements: each element is drawn at its default place, shifted to where it was dragged
+	/** Where each element was drawn this frame (screen coordinates); the HUD editor drags these. */
+	public static final java.util.Map<String, float[]> BOUNDS = new java.util.LinkedHashMap<>();
+	/** Each element's bounds at its default place (last frame), to work out the shift. */
+	private static final java.util.Map<String, float[]> DEFAULTS = new java.util.HashMap<>();
+	private static String curId;
+	private static float offX, offY, bx0, by0, bx1, by1;
+
+	private static final int CARD_BG = 0xC20E0E0E, CARD_EDGE = 0x30FFFFFF;
+	/** Rows of the counters card, filled by statLine while the Cards style is on: {title, value, detail, rgb}. */
+	private static final List<Object[]> STAT_ROWS = new ArrayList<>();
+	private static boolean cardMode;
+
+	/** A dark rounded card with a faint edge and a soft shadow (the HUD's Cards style). */
+	private static void card(GuiGraphics g, float x, float y, float w, float h) {
+		Draw.shadow(g, x, y, w, h, 4, 4, 60);
+		Draw.round(g, x, y, w, h, 4, CARD_EDGE);
+		Draw.round(g, x + 0.6f, y + 0.6f, w - 1.2f, h - 1.2f, 3.5f, CARD_BG);
+	}
+
+	private static String clip(String s, float room) {
+		if (Draw.width(s) <= room) return s;
+		while (s.length() > 1 && Draw.width(s + "...") > room) s = s.substring(0, s.length() - 1);
+		return s + "...";
+	}
+
+	/** Saved place of an element: {"x": fraction, "y": fraction, "right": anchored by its right edge}. */
+	public static com.google.gson.JsonObject placeOf(String id) {
+		com.google.gson.JsonObject gui = PrismClient.config().gui;
+		if (!gui.has("hud") || !gui.get("hud").isJsonObject()) return null;
+		com.google.gson.JsonObject hud = gui.getAsJsonObject("hud");
+		return hud.has(id) && hud.get(id).isJsonObject() ? hud.getAsJsonObject(id) : null;
+	}
+
+	public static void setPlace(String id, float left, float top, float bw, float bh, int w, int h) {
+		com.google.gson.JsonObject gui = PrismClient.config().gui;
+		if (!gui.has("hud") || !gui.get("hud").isJsonObject()) gui.add("hud", new com.google.gson.JsonObject());
+		boolean right = left + bw / 2 > w / 2f;
+		com.google.gson.JsonObject o = new com.google.gson.JsonObject();
+		o.addProperty("x", (right ? left + bw : left) / w);
+		o.addProperty("y", top / (float) h);
+		o.addProperty("right", right);
+		gui.getAsJsonObject("hud").add(id, o);
+	}
+
+	public static void resetPlace(String id) {
+		com.google.gson.JsonObject gui = PrismClient.config().gui;
+		if (gui.has("hud") && gui.get("hud").isJsonObject()) gui.getAsJsonObject("hud").remove(id);
+	}
+
+	private static void begin(GuiGraphics g, String id, int w, int h) {
+		curId = id;
+		offX = offY = 0;
+		com.google.gson.JsonObject place = placeOf(id);
+		float[] def = DEFAULTS.get(id);
+		if (place != null && def != null) {
+			float bw = def[2], bh = def[3];
+			float left = place.get("x").getAsFloat() * w - (place.has("right") && place.get("right").getAsBoolean() ? bw : 0);
+			float top = place.get("y").getAsFloat() * h;
+			left = Math.max(0, Math.min(left, w - bw));
+			top = Math.max(0, Math.min(top, h - bh));
+			offX = left - def[0];
+			offY = top - def[1];
+		}
+		bx0 = by0 = Float.MAX_VALUE;
+		bx1 = by1 = -Float.MAX_VALUE;
+		g.pose().pushMatrix();
+		g.pose().translate(offX, offY);
+	}
+
+	private static void end(GuiGraphics g) {
+		g.pose().popMatrix();
+		if (curId != null && bx1 > bx0) {
+			DEFAULTS.put(curId, new float[]{bx0, by0, bx1 - bx0, by1 - by0});
+			BOUNDS.put(curId, new float[]{bx0 + offX, by0 + offY, bx1 - bx0, by1 - by0});
+		}
+		curId = null;
+		offX = offY = 0;
+	}
+
+	/** Records a drawn box (in the element's default coordinates): for the labels and the element's bounds. */
+	private static void hudBox(float[] r) {
+		HUD_BOXES.add(new float[]{r[0] + offX, r[1] + offY, r[2], r[3]});
+		if (curId != null) {
+			bx0 = Math.min(bx0, r[0]);
+			by0 = Math.min(by0, r[1]);
+			bx1 = Math.max(bx1, r[0] + r[2]);
+			by1 = Math.max(by1, r[1] + r[3]);
+		}
+	}
+
+	/** The info box: coordinates, the other dimension's coordinates, facing, FPS, ping, speed. */
+	private static float info(GuiGraphics g, HudModule hud, float y, int w, int h) {
+		if (!hud.info.isOn()) return y;
+		Minecraft mc = Minecraft.getInstance();
+		List<String[]> lines = new ArrayList<>();
+		var p = mc.player;
+		var dim = mc.level.dimension();
+		// the first line names the dimension you are in; the second is where the same place is in the other one
+		String here = dim == net.minecraft.world.level.Level.OVERWORLD ? "Overworld" : dim == net.minecraft.world.level.Level.NETHER ? "Nether"
+			: dim == net.minecraft.world.level.Level.END ? "End" : "XYZ";
+		if (hud.infoCoords.isOn()) lines.add(new String[]{here, String.format(java.util.Locale.ROOT, "%.0f %.0f %.0f", Math.floor(p.getX()), Math.floor(p.getY()), Math.floor(p.getZ()))});
+		if (hud.infoNether.isOn()) {
+			if (dim == net.minecraft.world.level.Level.OVERWORLD)
+				lines.add(new String[]{"\u2192 Nether", String.format(java.util.Locale.ROOT, "%.0f %.0f", Math.floor(p.getX() / 8), Math.floor(p.getZ() / 8))});
+			else if (dim == net.minecraft.world.level.Level.NETHER)
+				lines.add(new String[]{"\u2192 Overworld", String.format(java.util.Locale.ROOT, "%.0f %.0f", Math.floor(p.getX() * 8), Math.floor(p.getZ() * 8))});
+		}
+		if (hud.infoFacing.isOn()) {
+			net.minecraft.core.Direction d = p.getDirection();
+			String axis = switch (d) { case NORTH -> "-Z"; case SOUTH -> "+Z"; case EAST -> "+X"; case WEST -> "-X"; default -> ""; };
+			String name = d.getName();
+			lines.add(new String[]{"Facing", Character.toUpperCase(name.charAt(0)) + name.substring(1) + " (" + axis + ")"});
+		}
+		if (hud.infoFps.isOn()) lines.add(new String[]{"FPS", String.valueOf(mc.getFps())});
+		if (hud.infoPing.isOn() && mc.getConnection() != null) {
+			var me = mc.getConnection().getPlayerInfo(p.getUUID());
+			if (me != null) lines.add(new String[]{"Ping", me.getLatency() + " ms"});
+		}
+		if (hud.infoSpeed.isOn()) {
+			var v = p.getDeltaMovement();
+			lines.add(new String[]{"Speed", String.format(java.util.Locale.ROOT, "%.1f b/s", Math.hypot(p.getX() - p.xo, p.getZ() - p.zo) * 20)});
+		}
+		if (lines.isEmpty()) return y;
+		begin(g, "info", w, h);
+		if (hud.cards()) {
+			// icon, grey label, white value; one row each
+			float rowH = 11, pad = 5, labelW = 0, valueW = 0;
+			for (String[] l : lines) { labelW = Math.max(labelW, Draw.width(l[0]) * 0.85f); valueW = Math.max(valueW, Draw.width(l[1])); }
+			float cw = pad + 10 + labelW + 6 + valueW + pad, ch = pad * 2 + lines.size() * rowH - 2;
+			card(g, 5, y, cw, ch);
+			hudBox(new float[]{5, y, cw, ch});
+			float ly = y + pad;
+			for (String[] l : lines) {
+				String icon = iconFor(l[0]);
+				if (icon.equals("arrow")) {
+					// the facing arrow turns with you (up = north)
+					g.pose().pushMatrix();
+					g.pose().translate(5 + pad + 4, ly + 4);
+					g.pose().rotate((float) Math.toRadians(mc.player.getYRot() + 180));
+					Draw.icon(g, "arrow", -4, -4, 8, 0xFFBDBDBD);
+					g.pose().popMatrix();
+				} else Draw.icon(g, icon, 5 + pad, ly, 8, 0xFFBDBDBD);
+				Draw.textScaled(g, l[0], 5 + pad + 12, ly + 1.2f, 0.85f, 0xFF8E8E8E, false);
+				Draw.text(g, l[1], 5 + pad + 12 + labelW + 6, ly + 0.5f, 0xFFF0F0F0);
+				ly += rowH;
+			}
+			end(g);
+			return y + ch + 4;
+		}
+		float ly = y + 2;
+		for (String[] l : lines) {
+			Draw.textShadow(g, l[0], 5, ly, 0xFFA8A8A8);
+			float vx = 5 + Draw.width(l[0]) + 4;
+			Draw.textShadow(g, l[1], vx, ly, 0xFFF0F0F0);
+			hudBox(new float[]{5, ly - 1, vx - 5 + Draw.width(l[1]), 10});
+			ly += 10;
+		}
+		end(g);
+		return ly + 4;
+	}
+
+	private static String iconFor(String label) {
+		if (label.startsWith("\u2192")) return "world";
+		return switch (label) {
+			case "Facing" -> "arrow";
+			case "FPS" -> "gauge";
+			case "Ping" -> "signal";
+			case "Speed" -> "speed";
+			default -> "pin";
+		};
+	}
+
+	/** Your armour and the items in your hands, each with a durability bar (Cards style; by default left of the hotbar). */
+	private static void armorCard(GuiGraphics g, int w, int h) {
+		Minecraft mc = Minecraft.getInstance();
+		net.minecraft.world.entity.EquipmentSlot[] slots = {net.minecraft.world.entity.EquipmentSlot.HEAD, net.minecraft.world.entity.EquipmentSlot.CHEST,
+			net.minecraft.world.entity.EquipmentSlot.LEGS, net.minecraft.world.entity.EquipmentSlot.FEET,
+			net.minecraft.world.entity.EquipmentSlot.MAINHAND, net.minecraft.world.entity.EquipmentSlot.OFFHAND};
+		List<net.minecraft.world.item.ItemStack> items = new ArrayList<>();
+		for (var s : slots) {
+			var st = mc.player.getItemBySlot(s);
+			if (!st.isEmpty()) items.add(st);
+		}
+		if (items.isEmpty()) return;
+		float cell = 15, pad = 4;
+		float cw = pad * 2 + items.size() * cell - 3, ch = pad * 2 + 16;
+		float x = w / 2f - 91 - 6 - cw, y = h - 2 - ch;
+		begin(g, "armor", w, h);
+		card(g, x, y, cw, ch);
+		hudBox(new float[]{x, y, cw, ch});
+		for (int i = 0; i < items.size(); i++) {
+			var st = items.get(i);
+			float ix = x + pad + i * cell;
+			g.pose().pushMatrix();
+			g.pose().translate(ix, y + pad);
+			g.pose().scale(0.75f, 0.75f);
+			g.renderItem(st, 0, 0);
+			g.pose().popMatrix();
+			if (st.isDamageableItem()) {
+				float left = 1f - st.getDamageValue() / (float) Math.max(1, st.getMaxDamage());
+				Draw.rect(g, ix, y + pad + 13, 12, 1.5f, 0xC0000000);
+				Draw.rect(g, ix, y + pad + 13, 12 * left, 1.5f, 0xFF000000 | st.getBarColor());
+			} else if (st.getCount() > 1) {
+				String c = String.valueOf(st.getCount());
+				Draw.textScaled(g, c, ix + 12 - Draw.width(c) * 0.6f, y + pad + 10, 0.6f, 0xFFF0F0F0, true);
+			}
+		}
+		end(g);
+	}
+
+	/** Your effects with icon, name, level and time left (Cards style). */
+	private static float potionsCard(GuiGraphics g, float y, int w, int h) {
+		Minecraft mc = Minecraft.getInstance();
+		var effects = new ArrayList<>(mc.player.getActiveEffects());
+		if (effects.isEmpty()) return y;
+		effects.sort(Comparator.comparingInt(e -> -e.getDuration()));
+		float rowH = 12, pad = 5, nameW = 0;
+		List<String[]> rows = new ArrayList<>();
+		String[] roman = {"", " II", " III", " IV", " V", " VI", " VII", " VIII", " IX", " X"};
+		for (var e : effects) {
+			String name = e.getEffect().value().getDisplayName().getString() + (e.getAmplifier() < roman.length ? roman[Math.max(0, e.getAmplifier())] : " " + (e.getAmplifier() + 1));
+			int t = e.getDuration() / 20;
+			String time = e.isInfiniteDuration() ? "\u221E" : t >= 3600 ? (t / 3600) + "h" : String.format(java.util.Locale.ROOT, "%d:%02d", t / 60, t % 60);
+			rows.add(new String[]{name, time});
+			nameW = Math.max(nameW, Draw.width(name) + 6 + Draw.width(time));
+		}
+		float cw = pad * 2 + 12 + nameW, ch = pad * 2 + rows.size() * rowH - 3;
+		begin(g, "potions", w, h);
+		card(g, 5, y, cw, ch);
+		hudBox(new float[]{5, y, cw, ch});
+		float ly = y + pad;
+		for (int i = 0; i < rows.size(); i++) {
+			var e = effects.get(i);
+			g.blitSprite(net.minecraft.client.renderer.RenderPipelines.GUI_TEXTURED, net.minecraft.client.gui.Gui.getMobEffectSprite(e.getEffect()), Math.round(5 + pad), Math.round(ly), 9, 9);
+			boolean bad = !e.getEffect().value().isBeneficial();
+			// blinking in the last 10 seconds, like the vanilla icons
+			boolean blink = !e.isInfiniteDuration() && e.getDuration() < 200 && (System.currentTimeMillis() / 400) % 2 == 0;
+			Draw.text(g, rows.get(i)[0], 5 + pad + 12, ly + 0.5f, bad ? 0xFFE57373 : 0xFFF0F0F0);
+			Draw.text(g, rows.get(i)[1], 5 + cw - pad - Draw.width(rows.get(i)[1]), ly + 0.5f, blink ? 0xFF5A5A5A : 0xFF9A9A9A);
+			ly += rowH;
+		}
+		end(g);
+		return y + ch + 4;
+	}
+
+	/** Cards style: whether the vanilla effect icons in the corner give way to the effects card. */
+	public static boolean replacesVanillaEffects() {
+		HudModule hud = PrismClient.modules().get(HudModule.class);
+		return hud.isEnabled() && hud.cards() && hud.potions.isOn();
+	}
+
+	/** The printer's panel: progress, what is in the way, and the materials still needed against what you carry. */
+	private static float printer(GuiGraphics g, float y, int w, int h) {
+		com.wailsvlr.prism.modules.Printer pr = PrismClient.modules().get(com.wailsvlr.prism.modules.Printer.class);
+		if (!pr.showHud()) return y;
+		List<com.wailsvlr.prism.modules.Printer.Material> mats = pr.materials();
+		int rows = Math.min(5, mats.size());
+		String status = pr.reason().isEmpty() && pr.easyPlaceOn() ? "Easy Place: right-click a box to place it" : pr.reason();
+		float x = 5, bw = 170;
+		com.wailsvlr.prism.modules.PrinterGuide guide = pr.guide();
+		List<String[]> setup = guide == null ? List.of() : guide.rows();
+		float bh = 34 + (status.isEmpty() ? 0 : 10) + (setup.isEmpty() ? 0 : 11 + setup.size() * 11) + (rows > 0 ? 11 + rows * 12 : 0) + (mats.size() > rows ? 9 : 0);
+		begin(g, "printer", w, h);
+		if (cardMode) card(g, x, y, bw, bh); else Draw.round(g, x, y, bw, bh, 4, 0xB4101010);
+		hudBox(new float[]{x, y, bw, bh});
+		Draw.icon(g, "cube", x + 6, y + 5, 9, 0xFFBDBDBD);
+		Draw.text(g, "Printer", x + 19, y + 5.5f, 0xFFF0F0F0);
+		float frac = pr.total() == 0 ? 0 : pr.placed() / (float) pr.total();
+		String pct = (int) Math.floor(frac * 100) + "%";
+		Draw.text(g, pct, x + bw - 6 - Draw.width(pct), y + 5.5f, 0xFFF0F0F0);
+		Draw.round(g, x + 6, y + 17, bw - 12, 3, 1.5f, 0xFF2A2A2A);
+		if (frac > 0) Draw.round(g, x + 6, y + 17, Math.max(3, (bw - 12) * frac), 3, 1.5f, 0xFFEDEDED);
+		String line = pr.placed() + " / " + pr.total() + " blocks" + (pr.wrong() > 0 ? "  ·  " + pr.wrong() + " wrong" : "")
+			+ (pr.layer() != Integer.MIN_VALUE ? "  ·  layer Y " + pr.layer() : "");
+		Draw.text(g, line, x + 6, y + 23, 0xFF9A9A9A);
+		float ly = y + 34;
+		if (!status.isEmpty()) {
+			Draw.text(g, status, x + 6, ly, 0xFFD6D6D6);
+			ly += 10;
+		}
+		if (!setup.isEmpty()) {
+			// the setup guide's checklist: what the blocks alone do not cover
+			Draw.textScaled(g, "SETUP", x + 6, ly + 1, 0.75f, 0xFF707070, false);
+			ly += 10;
+			for (String[] r : setup) {
+				boolean done = r[2].equals("1");
+				Draw.icon(g, r[0], x + 6, ly + 0.5f, 8, done ? 0xFF7FD48A : 0xFFE0B050);
+				Draw.text(g, clip(r[1], bw - 12 - 12), x + 18, ly + 0.5f, done ? 0xFF9A9A9A : 0xFFD6D6D6);
+				ly += 11;
+			}
+			ly += 1;
+		}
+		if (rows > 0) {
+			Draw.textScaled(g, "STILL NEEDED", x + 6, ly + 1, 0.75f, 0xFF707070, false);
+			ly += 10;
+			for (int i = 0; i < rows; i++) {
+				com.wailsvlr.prism.modules.Printer.Material m = mats.get(i);
+				net.minecraft.world.item.ItemStack st = new net.minecraft.world.item.ItemStack(m.item());
+				g.pose().pushMatrix();
+				g.pose().translate(x + 6, ly);
+				g.pose().scale(0.625f, 0.625f);
+				g.renderItem(st, 0, 0);
+				g.pose().popMatrix();
+				boolean shortOf = m.short_() > 0;
+				String right = shortOf ? m.have() + " / " + m.need() : String.valueOf(m.need());
+				float rw = Draw.width(right);
+				String name = st.getHoverName().getString();
+				float room = bw - 12 - 14 - rw - 6;
+				if (Draw.width(name) > room) {
+					while (!name.isEmpty() && Draw.width(name + "...") > room) name = name.substring(0, name.length() - 1);
+					name += "...";
+				}
+				Draw.text(g, name, x + 20, ly + 1.5f, 0xFFD6D6D6);
+				Draw.text(g, right, x + bw - 6 - rw, ly + 1.5f, shortOf ? 0xFFE57373 : 0xFF9A9A9A);
+				ly += 12;
+			}
+			if (mats.size() > rows) Draw.textScaled(g, "+" + (mats.size() - rows) + " more", x + 20, ly, 0.75f, 0xFF707070, false);
+		}
+		end(g);
+		return y + bh + 4;
+	}
+
+	public static void render(GuiGraphics g, DeltaTracker delta) {
+		long t0 = com.wailsvlr.prism.util.Perf.start();
+		try {
+			renderHud(g, delta);
+		} finally {
+			com.wailsvlr.prism.util.Perf.end("frame hud", t0);
+		}
+	}
+
+	private static void renderHud(GuiGraphics g, DeltaTracker delta) {
+		Minecraft mc = Minecraft.getInstance();
+		if (mc.options.hideGui || mc.player == null) return;
+		HudModule hud = PrismClient.modules().get(HudModule.class);
+		if (!hud.isEnabled()) return;
+		ClickGuiModule theme = PrismClient.modules().get(ClickGuiModule.class);
+		Draw.smooth = theme.font.is("Inter");
+		int w = g.guiWidth(), h = g.guiHeight();
+
+		HUD_BOXES.clear();
+		BOUNDS.clear();
+		float y = 5;
+		cardMode = hud.cards();
+		boolean textList = !cardMode && hud.moduleList.isOn() && hud.listStyle.is("Text") && hud.listSide.is("Right");
+		if (hud.watermark.isOn() && cardMode) {
+			begin(g, "watermark", w, h);
+			String name = "LEGIT";
+			Component logo = Draw.word(name, i -> theme.accentAt(i / (float) (name.length() - 1)));
+			List<String> parts = new ArrayList<>();
+			parts.add(mc.getFps() + " fps");
+			if (mc.getConnection() != null && mc.getConnection().getPlayerInfo(mc.player.getUUID()) != null)
+				parts.add(mc.getConnection().getPlayerInfo(mc.player.getUUID()).getLatency() + " ms");
+			parts.add(java.time.LocalTime.now().format(java.time.format.DateTimeFormatter.ofPattern("HH:mm")));
+			float pad = 6, gap = 7, bw = pad + Draw.width(logo) + 1;
+			for (String s : parts) bw += gap * 2 + 0.5f + Draw.width(s);
+			bw += pad - gap;
+			float bh = 15;
+			card(g, 5, y, bw, bh);
+			hudBox(new float[]{5, y, bw, bh});
+			float x = 5 + pad;
+			g.pose().pushMatrix();
+			g.pose().translate(x, y + 4);
+			g.drawString(mc.font, logo, 0, 0, 0xFFFFFFFF, false);
+			g.pose().popMatrix();
+			x += Draw.width(logo) + 1;
+			for (String s : parts) {
+				x += gap;
+				Draw.rect(g, x, y + 4, 0.5f, bh - 8, 0x40FFFFFF);
+				x += gap;
+				Draw.text(g, s, x, y + 4, 0xFFB4B4B4);
+				x += Draw.width(s);
+			}
+			end(g);
+			y += bh + 4;
+		}
+		if (hud.watermark.isOn() && !textList && !cardMode) {
+			begin(g, "watermark", w, h);
+			String name = "LEGIT";
+			String sub = " " + mc.getFps() + " fps";
+			Component logo = Draw.word(name, i -> theme.accentAt(i / (float) (name.length() - 1)));
+			float tw = Draw.width(logo) + 2;
+			float bw = tw + Draw.width(sub) + 14;
+			Draw.round(g, 5, y, bw, 14, 4, 0xC8101010);
+			hudBox(new float[]{5, y, bw, 14});
+			Draw.hGradient(g, 7, y + 13, bw - 4, 1, theme.accentAt(0), theme.accentAt(1));
+			float x = 11;
+			g.pose().pushMatrix();
+			g.pose().translate(x, y + 3);
+			g.drawString(mc.font, logo, 0, 0, 0xFFFFFFFF, false);
+			g.pose().popMatrix();
+			x += tw;
+			Draw.text(g, sub, x, y + 3, 0xFF929292);
+			end(g);
+			y += 18;
+		}
+
+		if (hud.finderStats.isOn()) {
+			begin(g, "stats", w, h);
+			STAT_ROWS.clear();
+			float statsTop = y;
+			StorageFinder sf = PrismClient.modules().get(StorageFinder.class);
+			if (sf.isEnabled() && sf.showHudCounts()) {
+				Map<StorageFinder.Kind, Integer> counts = sf.counts();
+				int total = counts.values().stream().mapToInt(Integer::intValue).sum();
+				y = statLine(g, y, "Storage", String.valueOf(total), summary(counts, (k, n) -> plural(k.label, n)), sf.colorSetting(StorageFinder.Kind.CHEST).rgb());
+			}
+			OreFinder of = PrismClient.modules().get(OreFinder.class);
+			if (of.isEnabled() && of.showHudCounts()) {
+				Map<OreFinder.Ore, Integer> oc = of.counts();
+				int total = oc.values().stream().mapToInt(Integer::intValue).sum();
+				y = statLine(g, y, "Ores", String.valueOf(total), summary(oc, (k, n) -> k.label), of.colorSetting(OreFinder.Ore.DIAMOND).rgb());
+			}
+			SpawnerFinder sp = PrismClient.modules().get(SpawnerFinder.class);
+			if (sp.isEnabled() && sp.showHudCount()) {
+				List<SpawnerFinder.Target> t = sp.targets();
+				String detail = "";
+				if (!t.isEmpty()) {
+					SpawnerFinder.Target n = t.get(0);
+					detail = "nearest " + n.mob().toLowerCase(java.util.Locale.ROOT) + "  \u00B7  " + Math.round(Math.sqrt(n.pos().distToCenterSqr(mc.player.position()))) + "m";
+				}
+				y = statLine(g, y, "Spawners", String.valueOf(t.size()), detail, 0xFF3B6B);
+			}
+			BlockFinder bf = PrismClient.modules().get(BlockFinder.class);
+			if (bf.isEnabled() && bf.showHudCounts()) {
+				Map<BlockFinder.Group, Integer> bc = bf.counts();
+				int total = bc.values().stream().mapToInt(Integer::intValue).sum();
+				y = statLine(g, y, "Blocks", String.valueOf(total), summary(bc, (k, n) -> k.label), 0xB04CFF);
+				List<BlockFinder.Base> bases = bf.bases();
+				if (!bases.isEmpty()) {
+					BlockFinder.Base b = bases.get(0);
+					y = statLine(g, y, "Bases", String.valueOf(bases.size()),
+						"nearest: " + b.score() + " pts " + bf.distance(b.center()) + "m " + bf.direction(b.center()) + (b.status().isEmpty() ? "" : " - " + b.status()) + PrismClient.modules().get(com.wailsvlr.prism.modules.BaseValue.class).labelFor(b),
+						b.status().equals("Raided") ? 0xFF3030 : b.status().equals("Maybe raided") ? 0xFFA500 : 0xFF2D95);
+				}
+			}
+			com.wailsvlr.prism.modules.TrailFinder tf = PrismClient.modules().get(com.wailsvlr.prism.modules.TrailFinder.class);
+			if (tf.isEnabled() && tf.showHudCount()) {
+				int[] c = tf.around(mc.options.getEffectiveRenderDistance());
+				String dir = c[0] > 0 && c[1] > 0 ? tf.trailDirection(mc.options.getEffectiveRenderDistance()) : "";
+				y = statLine(g, y, "Trails", c[0] + " old", c[1] + " new" + (dir.isEmpty() ? "" : "  old chunks: " + dir), 0x22C55E);
+			}
+			com.wailsvlr.prism.modules.ChunkFinder cf = PrismClient.modules().get(com.wailsvlr.prism.modules.ChunkFinder.class);
+			if (cf.isEnabled() && cf.showHudCount()) {
+				com.wailsvlr.prism.modules.ChunkFinder.Spot spot = cf.nearestSpot();
+				String detail = spot == null ? "no activity found" : "probable spot " + spot.x() + " " + spot.z() + "  "
+					+ Math.round(Math.hypot(spot.x() + 0.5 - mc.player.getX(), spot.z() + 0.5 - mc.player.getZ())) + "m";
+				y = statLine(g, y, "Activity", cf.active().size() + " chunks", detail, 0xB26BFF);
+			}
+			com.wailsvlr.prism.util.HeatMap.Marker target = com.wailsvlr.prism.util.HeatMap.get().target();
+			if (target != null) {
+				double dx = target.x + 0.5 - mc.player.getX(), dz = target.z + 0.5 - mc.player.getZ();
+				double dist = Math.hypot(dx, dz);
+				// angle of the target relative to the way you face, as one of eight arrows
+				double rel = Math.toDegrees(Math.atan2(-dx, dz)) - mc.player.getYRot();
+				String[] arrows = {"\u2191", "\u2197", "\u2192", "\u2198", "\u2193", "\u2199", "\u2190", "\u2196"};
+				String arrow = arrows[(int) Math.round((((rel % 360) + 360) % 360) / 45) % 8];
+				String what = target.type.equals("base") ? "base, " + target.status : target.type.equals("trail") ? "trail" : "spot";
+				y = statLine(g, y, "Target", arrow + " " + (dist >= 1000 ? String.format(java.util.Locale.ROOT, "%.1f km", dist / 1000) : Math.round(dist) + " m"),
+					target.x + " " + target.z + "  " + what, 0xFFD43B);
+			}
+			BaseHunter bh = PrismClient.modules().get(BaseHunter.class);
+			if (bh.isEnabled()) y = statLine(g, y, "Hunter", "#" + bh.teleports(), bh.status() + (bh.found() > 0 ? "  found " + bh.found() : ""), 0xFFD43B);
+			ItemFinder itf = PrismClient.modules().get(ItemFinder.class);
+			if (itf.isEnabled() && itf.showHudCount()) {
+				List<ItemFinder.Target> t = itf.targets();
+				String detail = t.isEmpty() ? "" : "nearest: " + t.get(0).name() + (t.get(0).count() > 1 ? " ×" + t.get(0).count() : "") + " " + Math.round(t.get(0).distance()) + "m";
+				y = statLine(g, y, "Items", String.valueOf(t.size()), detail, 0x7CFFB2);
+			}
+			com.wailsvlr.prism.modules.BaseValue bv = PrismClient.modules().get(com.wailsvlr.prism.modules.BaseValue.class);
+			if (bv.showHud()) { String[] bl = bv.hudLine(); y = statLine(g, y, "Base", bl[0], bl[1], bv.current() != null ? 0xFFC21A : 0xA2A2A2); }
+			com.wailsvlr.prism.modules.MoneyTracker money = PrismClient.modules().get(com.wailsvlr.prism.modules.MoneyTracker.class);
+			if (money.showHud()) y = statLine(g, y, "Money", "$" + com.wailsvlr.prism.util.Money.format(money.balance()), money.hudDetail(), 0x4ADE80);
+			PlayerFinder pf = PrismClient.modules().get(PlayerFinder.class);
+			if (pf.isEnabled() && pf.showHudCount()) {
+				List<PlayerFinder.Target> t = pf.targets();
+				String detail = t.isEmpty() ? "" : "nearest: " + t.get(0).name() + " " + Math.round(t.get(0).distance()) + "m";
+				y = statLine(g, y, "Players", String.valueOf(t.size()), detail, pf.hudColor());
+			}
+			if (cardMode && !STAT_ROWS.isEmpty()) {
+				// one card: a coloured dot, the name, the count, and the detail in grey (cut to fit)
+				float pad = 5, rowH = 11, tw = 0, vw = 0;
+				for (Object[] r : STAT_ROWS) { tw = Math.max(tw, Draw.width((String) r[0]) * 0.85f); vw = Math.max(vw, Draw.width((String) r[1])); }
+				float dw = 0;
+				for (Object[] r : STAT_ROWS) dw = Math.max(dw, Draw.width((String) r[2]));
+				float maxW = w * 0.42f;
+				float cw = Math.min(maxW, pad + 6 + tw + 6 + vw + (dw > 0 ? 8 + dw : 0) + pad);
+				float ch = pad * 2 + STAT_ROWS.size() * rowH - 2;
+				card(g, 5, statsTop, cw, ch);
+				hudBox(new float[]{5, statsTop, cw, ch});
+				float ly = statsTop + pad;
+				for (Object[] r : STAT_ROWS) {
+					Draw.circle(g, 5 + pad + 2, ly + 4, 2, 0xFF000000 | (int) r[3]);
+					Draw.textScaled(g, (String) r[0], 5 + pad + 7, ly + 1.2f, 0.85f, 0xFF8E8E8E, false);
+					float vx = 5 + pad + 7 + tw + 6;
+					Draw.text(g, (String) r[1], vx, ly + 0.5f, 0xFFF0F0F0);
+					String d = (String) r[2];
+					if (!d.isEmpty()) Draw.text(g, clip(d, 5 + cw - pad - (vx + vw + 8)), vx + vw + 8, ly + 0.5f, 0xFF8A8A8A);
+					ly += rowH;
+				}
+				y = statsTop + ch + 4;
+			}
+			end(g);
+		}
+
+		float afterInfo = info(g, hud, y, w, h);
+		float afterPrinter = printer(g, afterInfo, w, h);
+		if (cardMode && hud.potions.isOn()) potionsCard(g, afterPrinter, w, h);
+		if (cardMode && hud.armor.isOn()) armorCard(g, w, h);
+
+		if (hud.moduleList.isOn()) {
+			begin(g, "list", w, h);
+			List<Module> on = new ArrayList<>();
+			for (Module m : PrismClient.modules().all()) {
+				m.anim += ((m.isEnabled() ? 1f : 0f) - m.anim) * 0.25f;
+				if (m.anim > 0.02f && !(m instanceof ClickGuiModule) && !(m instanceof HudModule)) on.add(m);
+			}
+			on.sort(Comparator.comparingInt(m -> -lineWidth(m)));
+			boolean right = hud.listSide.is("Right");
+			float ly = right ? 5 : y + 2;
+			if (cardMode) {
+				// strips: a dark band per module, a bright edge on the outer side, sliding in and out
+				float rowH = 12;
+				for (int i = 0; i < on.size(); i++) {
+					Module m = on.get(i);
+					float lw = lineWidth(m) + 11;
+					float x = right ? w - 4 - lw + (1 - m.anim) * (lw + 8) : 4 - (1 - m.anim) * (lw + 8);
+					float hh = rowH * Math.min(1, m.anim * 1.5f);
+					int a = Math.round(255 * m.anim);
+					int accent = theme.accentAt(on.size() <= 1 ? 0 : i / (float) (on.size() - 1));
+					Draw.rect(g, x, ly, lw, hh, ColorUtil.argb(Math.round(0xC0 * m.anim), 0x0E0E0E));
+					Draw.rect(g, right ? x + lw - 1.5f : x, ly, 1.5f, hh, ColorUtil.withAlphaMul(accent, m.anim));
+					float tx = right ? x + 4.5f : x + 6.5f;
+					Draw.text(g, m.getName(), tx, ly + 2.5f, ColorUtil.argb(a, 0xF2F2F2));
+					String info = m.getInfo();
+					if (info != null) Draw.text(g, info, tx + Draw.width(m.getName() + " "), ly + 2.5f, ColorUtil.argb(a, 0x8E8E8E));
+					hudBox(new float[]{x, ly, lw, rowH});
+					ly += hh;
+				}
+				on.clear();
+			}
+			if (hud.listStyle.is("Text") && !cardMode) {
+				// big logo over the list, then the names right (or left) aligned, coloured along the accent gradient
+				if (hud.watermark.isOn() && right) {
+					String name = "LEGIT";
+					float sc = 1.6f, lx = w - 5;
+					Component logo = Draw.word(name, i -> theme.accentAt(i / (float) (name.length() - 1)));
+					float tw = Draw.width(logo) * sc;
+					g.pose().pushMatrix();
+					g.pose().translate(lx - tw, ly);
+					g.pose().scale(sc, sc);
+					g.drawString(mc.font, logo, 0, 0, 0xFFFFFFFF, true);
+					g.pose().popMatrix();
+					String fps = mc.getFps() + " fps";
+					Draw.textShadow(g, fps, lx - Draw.width(fps), ly + 9 * sc + 1, 0xFFBEBEBE);
+					hudBox(new float[]{lx - tw, ly, tw, 9 * sc + 11});
+					ly += 9 * sc + 13;
+				}
+				for (int i = 0; i < on.size(); i++) {
+					Module m = on.get(i);
+					int lw = lineWidth(m);
+					float x = right ? w - 5 - lw * m.anim - (1 - m.anim) * 0 : 5 - lw * (1 - m.anim);
+					if (right) x = w - 5 - lw + (1 - m.anim) * (lw + 10);
+					int accent = theme.accentAt(on.size() <= 1 ? 0 : i / (float) (on.size() - 1));
+					Draw.textShadow(g, m.getName(), x, ly, ColorUtil.withAlphaMul(accent, m.anim));
+					String info = m.getInfo();
+					if (info != null) Draw.textShadow(g, info, x + Draw.width(m.getName() + " "), ly, ColorUtil.argb(Math.round(255 * m.anim), 0xBEBEBE));
+					hudBox(new float[]{x, ly, lw, 10});
+					ly += 10 * m.anim;
+				}
+				on.clear();
+			}
+			for (int i = 0; i < on.size(); i++) {
+				Module m = on.get(i);
+				int lw = lineWidth(m) + 10;
+				float x = right ? w - 5 - lw * m.anim : 5 - lw * (1 - m.anim);
+				int accent = theme.accentAt(on.size() <= 1 ? 0 : i / (float) (on.size() - 1));
+				Draw.rect(g, x, ly, lw, 12, ColorUtil.argb(Math.round(170 * m.anim), 0x101010));
+				hudBox(new float[]{x, ly, lw, 12});
+				Draw.rect(g, right ? x + lw - 1.5f : x, ly, 1.5f, 12, ColorUtil.withAlphaMul(accent, m.anim));
+				Draw.text(g, m.getName(), x + 5, ly + 2, ColorUtil.argb(Math.round(255 * m.anim), 0xEFEFEF));
+				String info = m.getInfo();
+				if (info != null) Draw.text(g, info, x + 5 + Draw.width(m.getName() + " "), ly + 2, ColorUtil.argb(Math.round(255 * m.anim), 0x929292));
+				ly += 12 * m.anim;
+			}
+			end(g);
+		}
+
+		frames2D(g, w, h);
+		labels(g, hud, w, h);
+		crafterTip(g, w, h);
+	}
+
+	/** Looking at a crafter of the schematic: its slot layout and starting items by the crosshair (the Printer's setup guide). */
+	@SuppressWarnings("unchecked")
+	private static void crafterTip(GuiGraphics g, int w, int h) {
+		Minecraft mc = Minecraft.getInstance();
+		if (mc.screen != null) return;
+		com.wailsvlr.prism.modules.PrinterGuide guide = PrismClient.modules().get(com.wailsvlr.prism.modules.Printer.class).guide();
+		if (guide == null) return;
+		Object[] c = guide.lookedAtCrafter();
+		if (c == null) return;
+		java.util.Set<Integer> locked = (java.util.Set<Integer>) c[0];
+		Map<Integer, net.minecraft.world.item.Item> items = (Map<Integer, net.minecraft.world.item.Item>) c[1];
+		boolean ok = (boolean) c[2];
+		float cell = 11, gap = 1.5f, pad = 5;
+		float grid = cell * 3 + gap * 2;
+		String title = "Crafter", sub = ok ? "set right" : locked.isEmpty() ? "all slots open" : (9 - locked.size()) + " open, " + locked.size() + " locked";
+		float cw = pad * 2 + Math.max(grid, Math.max(Draw.width(title), Draw.width(sub) * 0.8f)), ch = pad * 2 + 10 + grid + 9;
+		float x = w / 2f + 14, y = h / 2f - ch / 2f;
+		card(g, x, y, cw, ch);
+		Draw.text(g, title, x + pad, y + pad, 0xFFF0F0F0);
+		float gx = x + pad, gy = y + pad + 11;
+		for (int i = 0; i < 9; i++) {
+			float cx = gx + (i % 3) * (cell + gap), cy = gy + (i / 3) * (cell + gap);
+			boolean lockedSlot = locked.contains(i);
+			// open slots dark (like the game's), locked ones light with a cross
+			Draw.round(g, cx, cy, cell, cell, 1.5f, lockedSlot ? 0xFFB9B9B9 : 0xFF2A2A2A);
+			if (lockedSlot) {
+				Draw.rect(g, cx + 3, cy + cell / 2f - 0.5f, cell - 6, 1, 0xFF6A6A6A);
+			} else if (items.containsKey(i)) {
+				g.pose().pushMatrix();
+				g.pose().translate(cx + 1.5f, cy + 1.5f);
+				g.pose().scale(0.5f, 0.5f);
+				g.renderItem(new net.minecraft.world.item.ItemStack(items.get(i)), 0, 0);
+				g.pose().popMatrix();
+			}
+		}
+		Draw.textScaled(g, sub, x + pad, gy + grid + 3, 0.8f, ok ? 0xFF7FD48A : 0xFF9A9A9A, false);
+	}
+
+	/** "3 chests  ·  2 shulker boxes  +3": the three biggest counts in lower case, then how many kinds are left out. */
+	private static <K> String summary(Map<K, Integer> counts, java.util.function.BiFunction<K, Integer, String> name) {
+		List<Map.Entry<K, Integer>> es = new ArrayList<>(counts.entrySet());
+		es.removeIf(e -> e.getValue() <= 0);
+		es.sort((a, b) -> b.getValue() - a.getValue());
+		StringBuilder sb = new StringBuilder();
+		for (int i = 0; i < Math.min(3, es.size()); i++) {
+			if (sb.length() > 0) sb.append("  \u00B7  ");
+			sb.append(es.get(i).getValue()).append(' ').append(name.apply(es.get(i).getKey(), es.get(i).getValue()).toLowerCase(java.util.Locale.ROOT));
+		}
+		if (es.size() > 3) sb.append("  +").append(es.size() - 3);
+		return sb.toString();
+	}
+
+	private static String plural(String s, int n) {
+		if (n == 1) return s;
+		return s.endsWith("x") ? s + "es" : s + "s";
+	}
+
+	private static int lineWidth(Module m) {
+		Minecraft mc = Minecraft.getInstance();
+		String info = m.getInfo();
+		return Draw.width(m.getName()) + (info != null ? Draw.width(" " + info) : 0);
+	}
+
+	private static float statLine(GuiGraphics g, float y, String title, String value, String detail, int rgb) {
+		if (cardMode) {
+			STAT_ROWS.add(new Object[]{title, value, detail, rgb});
+			return y;
+		}
+		Minecraft mc = Minecraft.getInstance();
+		String text = title + "  " + value;
+		float w = Draw.width(text) + (detail.isEmpty() ? 0 : Draw.width("  " + detail)) + 10;
+		hudBox(new float[]{5, y - 1, w, 10});
+		Draw.circle(g, 7, y + 4.5f, 1.6f, 0xFF000000 | rgb);
+		Draw.textShadow(g, title, 11, y, 0xFFA8A8A8);
+		Draw.textShadow(g, value, 11 + Draw.width(title + "  "), y, 0xFFF0F0F0);
+		if (!detail.isEmpty()) Draw.textShadow(g, detail, 11 + Draw.width(text + "  "), y, 0xFF8A8A8A);
+		return y + 10;
+	}
+
+	private static boolean overlaps(List<float[]> rects, float x, float y, float w, float h) {
+		for (float[] r : rects) if (x < r[0] + r[2] && x + w > r[0] && y < r[1] + r[3] && y + h > r[1]) return true;
+		return false;
+	}
+
+	/** "2D" mode: a frame with corner brackets around each target on the screen, and a health bar on its left. */
+	private static void frames2D(GuiGraphics g, int w, int h) {
+		for (Highlight hl : EspRenderer.lastFrame()) {
+			if (!hl.style().screen2D()) continue;
+			net.minecraft.world.phys.AABB b = hl.box();
+			float x0 = Float.MAX_VALUE, y0 = Float.MAX_VALUE, x1 = -Float.MAX_VALUE, y1 = -Float.MAX_VALUE;
+			int seen = 0;
+			for (int i = 0; i < 8; i++) {
+				float[] p = Projection.toScreen(new Vec3((i & 1) == 0 ? b.minX : b.maxX, (i & 2) == 0 ? b.minY : b.maxY, (i & 4) == 0 ? b.minZ : b.maxZ), w, h);
+				if (p == null) continue;
+				seen++;
+				x0 = Math.min(x0, p[0]); y0 = Math.min(y0, p[1]); x1 = Math.max(x1, p[0]); y1 = Math.max(y1, p[1]);
+			}
+			if (seen < 4 || x1 - x0 < 2 || y1 - y0 < 2) continue;
+			float fw = x1 - x0, fh = y1 - y0;
+			int col = 0xFF000000 | hl.rgb(), shade = 0x90000000;
+			float lx = Math.max(2, fw * 0.3f), ly = Math.max(2, fh * 0.22f), t = 1f;
+			// dark bracket under the coloured one, so it reads on any background
+			for (int pass = 0; pass < 2; pass++) {
+				float o = pass == 0 ? 0.5f : 0, tt = pass == 0 ? t + 1 : t;
+				int c = pass == 0 ? shade : col;
+				for (int cx = 0; cx < 2; cx++) {
+					for (int cy = 0; cy < 2; cy++) {
+						float px = cx == 0 ? x0 : x1 - tt, py = cy == 0 ? y0 : y1 - tt;
+						Draw.rect(g, (cx == 0 ? px : px - lx + tt) - o, py - o, lx + o * 2, tt, c);
+						Draw.rect(g, px - o, (cy == 0 ? py : py - ly + tt) - o, tt, ly + o * 2, c);
+					}
+				}
+			}
+			if (hl.health() >= 0) {
+				float bx = x0 - 4, hp = hl.health();
+				Draw.rect(g, bx - 0.5f, y0 - 0.5f, 2.5f, fh + 1, 0xA0000000);
+				int hc = com.wailsvlr.prism.util.ColorUtil.lerp(0xFFEF4444, 0xFF4ADE80, hp);
+				Draw.rect(g, bx, y0 + fh * (1 - hp), 1.5f, fh * hp, hc);
+			}
+		}
+	}
+
+	/** Name tags above highlighted blocks, placed with the camera matrices of the last frame. */
+	private static void labels(GuiGraphics g, HudModule hud, int w, int h) {
+		Minecraft mc = Minecraft.getInstance();
+		float scale = hud.labelScale.getFloat();
+		// nearest first; a label that would overlap one already drawn moves up, and is skipped if there is no room
+		List<Highlight> withLabels = new ArrayList<>();
+		for (Highlight hl : EspRenderer.lastFrame()) if (hl.label() != null) withLabels.add(hl);
+		Vec3 eye = mc.player.getEyePosition();
+		withLabels.sort(Comparator.comparingDouble(hl -> hl.box().getCenter().distanceToSqr(eye)));
+		List<float[]> placed = new ArrayList<>(HUD_BOXES);
+		int hudBoxes = placed.size();
+		int tried = 0;
+		for (Highlight hl : withLabels) {
+			// only the nearest ones: far labels are unreadable anyway and would cost a lot with hundreds of chests
+			if (placed.size() - hudBoxes >= MAX_LABELS || ++tried > MAX_LABELS * 3) break;
+			Vec3 c = hl.box().getCenter();
+			float[] p = Projection.toScreen(new Vec3(c.x, hl.box().maxY + hl.labelLift(), c.z), w, h);
+			if (p == null) continue;
+			// "Chest 12m": the name in white, the distance after it in grey
+			String label = hl.label(), name = label, dist = "";
+			int sp = label.lastIndexOf(' ');
+			if (sp > 0 && label.substring(sp + 1).matches("[0-9.]+k?m")) { name = label.substring(0, sp); dist = label.substring(sp + 1); }
+			boolean bg = hud.labelBackground.isOn();
+			float pad = 4 * scale, dotW = 7 * scale;
+			float nw = Draw.width(name) * scale, dw = dist.isEmpty() ? 0 : Draw.width(dist) * scale + 4 * scale;
+			float bw = pad * 2 + dotW + nw + dw, bh = 12 * scale;
+			float x = p[0] - bw / 2, y = p[1] - bh - 2 * scale;
+			int tries = 0;
+			while (overlaps(placed, x, y, bw, bh) && tries++ < 4) y -= bh + 1;
+			if (overlaps(placed, x, y, bw, bh)) continue;
+			placed.add(new float[]{x, y, bw, bh + 1});
+			double d = c.distanceTo(eye);
+			float al = (float) Math.max(0.55, Math.min(1, 1 - (d - 16) / 220));
+			int A = Math.round(255 * al) << 24;
+			// moved up to keep clear of another label: a thin line back down to its block
+			if (y + bh < p[1] - 3 * scale) Draw.rect(g, p[0] - 0.25f, y + bh, 0.5f, p[1] - (y + bh), Math.round(110 * al) << 24 | 0xFFFFFF);
+			if (bg) Draw.round(g, x, y, bw, bh, bh / 2f, Math.round(0xB8 * al) << 24 | 0x0E0E0E);
+			Draw.circle(g, x + pad + 2.3f * scale, y + bh / 2f, 2.3f * scale, A | (hl.rgb() & 0xFFFFFF));
+			Draw.textScaled(g, name, x + pad + dotW, y + 2.6f * scale, scale, A | 0xF2F2F2, !bg);
+			if (!dist.isEmpty()) Draw.textScaled(g, dist, x + pad + dotW + nw + 4 * scale, y + 2.6f * scale, scale, A | 0x9C9C9C, !bg);
+			if (hl.health() >= 0) {
+				// a thin health bar just under the tag
+				float hx = x + bh / 2f, hw = bw - bh, hy = y + bh + 1f * scale;
+				Draw.rect(g, hx, hy, hw, 1f * scale, Math.round(0x90 * al) << 24);
+				Draw.rect(g, hx, hy, hw * hl.health(), 1f * scale,
+					(A & 0xFF000000) | (com.wailsvlr.prism.util.ColorUtil.lerp(0xFFEF4444, 0xFF4ADE80, hl.health()) & 0xFFFFFF));
+			}
+		}
+	}
+}

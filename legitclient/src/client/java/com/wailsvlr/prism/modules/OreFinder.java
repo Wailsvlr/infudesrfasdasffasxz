@@ -1,0 +1,216 @@
+package com.wailsvlr.prism.modules;
+
+import com.wailsvlr.prism.render.Highlight;
+import com.wailsvlr.prism.render.HighlightStyle;
+import com.wailsvlr.prism.setting.BoolSetting;
+import com.wailsvlr.prism.setting.ChipsSetting;
+import com.wailsvlr.prism.setting.ColorSetting;
+import com.wailsvlr.prism.setting.NumberSetting;
+import com.wailsvlr.prism.setting.SectionSetting;
+import com.wailsvlr.prism.util.BlockEntityScanner;
+import com.wailsvlr.prism.util.ChunkScanner;
+import net.minecraft.client.multiplayer.ClientLevel;
+import net.minecraft.core.BlockPos;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.phys.AABB;
+
+import java.util.ArrayList;
+import java.util.EnumMap;
+import java.util.IdentityHashMap;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * Highlights ores in the chunks the client has loaded. Ores are ordinary blocks (not block entities), so chunks are
+ * scanned a few per tick; sections whose block palette cannot contain a selected ore are skipped without looking at
+ * their blocks. Results are cached per chunk and refreshed in the background; mined ores disappear within 5 ticks.
+ *
+ * Note: servers with anti-xray (e.g. Paper's) send fake or hidden ores to the client; nothing client-side can see
+ * through that. "Exposed Only" shows just ores touching air, which anti-xray leaves real.
+ */
+public class OreFinder extends FinderModule {
+	public enum Ore {
+		DIAMOND("Diamond", 0x4EE8F0, true, Blocks.DIAMOND_ORE, Blocks.DEEPSLATE_DIAMOND_ORE),
+		ANCIENT_DEBRIS("Ancient Debris", 0xA0522D, true, Blocks.ANCIENT_DEBRIS),
+		EMERALD("Emerald", 0x22E06B, true, Blocks.EMERALD_ORE, Blocks.DEEPSLATE_EMERALD_ORE),
+		GOLD("Gold", 0xFFD43B, true, Blocks.GOLD_ORE, Blocks.DEEPSLATE_GOLD_ORE),
+		IRON("Iron", 0xE8B89A, false, Blocks.IRON_ORE, Blocks.DEEPSLATE_IRON_ORE),
+		REDSTONE("Redstone", 0xFF2D2D, false, Blocks.REDSTONE_ORE, Blocks.DEEPSLATE_REDSTONE_ORE),
+		LAPIS("Lapis", 0x2F5BFF, false, Blocks.LAPIS_ORE, Blocks.DEEPSLATE_LAPIS_ORE),
+		COPPER("Copper", 0xE87A4E, false, Blocks.COPPER_ORE, Blocks.DEEPSLATE_COPPER_ORE),
+		COAL("Coal", 0x5A5A5A, false, Blocks.COAL_ORE, Blocks.DEEPSLATE_COAL_ORE),
+		NETHER_GOLD("Nether Gold", 0xF5C542, false, Blocks.NETHER_GOLD_ORE),
+		QUARTZ("Nether Quartz", 0xF2EDE4, false, Blocks.NETHER_QUARTZ_ORE);
+
+		public final String label;
+		final int color;
+		final boolean on;
+		final Block[] blocks;
+
+		Ore(String label, int color, boolean on, Block... blocks) {
+			this.label = label; this.color = color; this.on = on; this.blocks = blocks;
+		}
+	}
+
+	private static final Map<Block, Ore> BY_BLOCK = new IdentityHashMap<>();
+	static {
+		for (Ore o : Ore.values()) for (Block b : o.blocks) BY_BLOCK.put(b, o);
+	}
+
+	private final Map<Ore, BoolSetting> enabled = new EnumMap<>(Ore.class);
+	private final Map<Ore, ColorSetting> colors = new EnumMap<>(Ore.class);
+	private final BoolSetting exposedOnly, hudCounts;
+	private final NumberSetting minY, maxY, chunksPerTick, refreshSeconds, maxTargets;
+
+	public record Found(BlockPos pos, Ore ore) { }
+
+	/** Ores by block, filtered by the ore switches (rebuilt when they change). */
+	private final ChunkScanner<Ore> scanner = new ChunkScanner<>(st -> null);
+	private volatile List<Found> targets = List.of();
+	private final Map<Ore, Integer> counts = new EnumMap<>(Ore.class);
+	private String lastConfig = "";
+	private long tick;
+
+	public OreFinder() {
+		super("OreFinder", "Highlights ores (pick which ones). Note: servers with anti-xray hide the real ores from the client");
+		add(new SectionSetting("Ores"));
+		ChipsSetting chips = add(new ChipsSetting("Ores", "Click an ore to show or hide it, right click it to change its colour"));
+		for (Ore o : Ore.values()) enabled.put(o, add(new BoolSetting(o.label, "Highlight " + o.label.toLowerCase() + " ore", o.on)));
+
+		addLookSettings("Both", 20);
+
+		for (Ore o : Ore.values()) {
+			ColorSetting c = add(new ColorSetting(o.label + " Color", "Colour of " + o.label.toLowerCase() + " highlights", 0xFF000000 | o.color));
+			colors.put(o, c);
+			chips.chip(enabled.get(o), c);
+		}
+
+		add(new SectionSetting("Filter"));
+		exposedOnly = add(new BoolSetting("Exposed Only", "Only ores touching air or a cave (also what anti-xray servers still show for real)", false));
+		minY = add(new NumberSetting("Min Y", "Ignore ores below this height", -64, -64, 320, 1, ""));
+		maxY = add(new NumberSetting("Max Y", "Ignore ores above this height", 320, -64, 320, 1, ""));
+
+		addExtraSettings(64, false, false);
+		chunksPerTick = add(new NumberSetting("Chunks Per Tick", "How many chunks to scan each tick (higher finds faster, costs more FPS)", 4, 1, 32, 1, ""));
+		refreshSeconds = add(new NumberSetting("Refresh", "Re-scan each chunk this often to catch blocks placed later (mined ores vanish on their own)", 30, 5, 120, 1, " s"));
+		maxTargets = add(new NumberSetting("Max Targets", "Never draw more than this many ores (nearest first)", 1500, 100, 6000, 100, ""));
+		hudCounts = add(new BoolSetting("HUD Counter", "Show how many of each ore were found in the HUD", true));
+		rareAlert = add(new BoolSetting("Rare Ore Alert", "A chat line, a card and a ping when diamonds or ancient debris come into range (once per chunk)", false));
+	}
+
+	private BoolSetting rareAlert;
+	private final java.util.Set<String> knownRare = new java.util.HashSet<>();
+	private Object rareLevel;
+
+	@Override
+	protected boolean hasAlerts() { return rareAlert != null && rareAlert.isOn(); }
+
+	private void rareFound(Found f) {
+		BlockPos p = f.pos();
+		int dist = (int) Math.round(Math.sqrt(p.distToCenterSqr(mc.player.position())));
+		String xyz = p.getX() + " " + p.getY() + " " + p.getZ();
+		mc.gui.getChat().addMessage(net.minecraft.network.chat.Component.literal("[Legit] ").withStyle(net.minecraft.ChatFormatting.LIGHT_PURPLE)
+			.append(net.minecraft.network.chat.Component.literal(f.ore().label + " at ").withStyle(net.minecraft.ChatFormatting.WHITE))
+			.append(net.minecraft.network.chat.Component.literal(xyz).withStyle(net.minecraft.ChatFormatting.AQUA))
+			.append(net.minecraft.network.chat.Component.literal(" (" + dist + "m)").withStyle(net.minecraft.ChatFormatting.GRAY)));
+		card(f.ore().name() + (p.getX() >> 4) + ":" + (p.getZ() >> 4), f.ore().label + " at " + xyz + " (" + dist + "m)");
+		mc.player.playSound(net.minecraft.sounds.SoundEvents.EXPERIENCE_ORB_PICKUP, 0.6f, 1.9f);
+	}
+
+	public static Ore oreOf(BlockState state) { return BY_BLOCK.get(state.getBlock()); }
+
+	@Override
+	protected void onEnable() { scanner.clear(); lastConfig = ""; targets = List.of(); }
+
+	@Override
+	protected void onDisable() { scanner.clear(); targets = List.of(); synchronized (counts) { counts.clear(); } }
+
+	/** A key that changes whenever a setting that affects what is found changes. */
+	private String configKey() {
+		StringBuilder sb = new StringBuilder();
+		for (Ore o : Ore.values()) sb.append(enabled.get(o).isOn() ? '1' : '0');
+		return sb.append(exposedOnly.isOn()).append(minY.getInt()).append(':').append(maxY.getInt()).toString();
+	}
+
+	@Override
+	public void onTick() {
+		ClientLevel level = mc.level;
+		if (level == null || mc.player == null) return;
+		String cfg = configKey();
+		if (!cfg.equals(lastConfig)) {
+			lastConfig = cfg;
+			boolean[] on = new boolean[Ore.values().length];   // looked up once here instead of once per block
+			for (Ore o : Ore.values()) on[o.ordinal()] = enabled.get(o).isOn();
+			scanner.setClassifier(st -> { Ore o = BY_BLOCK.get(st.getBlock()); return o != null && on[o.ordinal()] ? o : null; });
+		}
+		tick++;
+		boolean scanned = scanner.tick(level, mc.player.blockPosition(), new ChunkScanner.Options(
+			BlockEntityScanner.chunkRadius(range.get()), minY.getInt(), maxY.getInt(), chunksPerTick.getInt(),
+			refreshSeconds.getInt() * 20L, exposedOnly.isOn()));
+		// every 5 ticks drop ores that were mined or changed, and rebuild the target list
+		BlockPos here = mc.player.blockPosition();
+		if (scanner.version() != lastVersion || lastRebuildPos == null || lastRebuildPos.distManhattan(here) >= 4 || tick - lastRebuildTick >= 100) {
+			if (tick - lastDropTick >= 200) { scanner.dropChanged(level); lastDropTick = tick; }
+			rebuild(level);
+			lastVersion = scanner.version();
+			lastRebuildPos = here;
+			lastRebuildTick = tick;
+		}
+	}
+
+	/** Called for every block change on the client (see ClientLevelMixin). */
+	public void onBlockChanged(BlockPos pos, BlockState oldState, BlockState newState) {
+		if (isEnabled()) scanner.blockChanged(pos, oldState, newState, exposedOnly.isOn());
+	}
+
+	private long lastVersion = -1, lastRebuildTick, lastDropTick;
+	private BlockPos lastRebuildPos;
+
+	private void rebuild(ClientLevel level) {
+		List<Found> all = new ArrayList<>();
+		for (ChunkScanner.ChunkResult<Ore> r : scanner.results()) for (ChunkScanner.Found<Ore> f : r.found()) all.add(new Found(f.pos(), f.kind()));
+		BlockPos c = mc.player.blockPosition();
+		double r2 = range.get() * range.get();
+		all.removeIf(f -> f.pos().distSqr(c) > r2);
+		all.sort((a, b) -> Double.compare(a.pos().distSqr(c), b.pos().distSqr(c)));
+		Map<Ore, Integer> cnt = new EnumMap<>(Ore.class);
+		for (Found f : all) cnt.merge(f.ore(), 1, Integer::sum);
+		synchronized (counts) { counts.clear(); counts.putAll(cnt); }
+		int max = maxTargets.getInt();
+		targets = all.size() > max ? new ArrayList<>(all.subList(0, max)) : all;
+		if (all.isEmpty()) nearest(null, null, 0);
+		else nearest(net.minecraft.world.phys.Vec3.atCenterOf(all.get(0).pos()), all.get(0).ore().label, colorSetting(all.get(0).ore()).rgb());
+		if (level != rareLevel) { rareLevel = level; knownRare.clear(); }
+		if (rareAlert.isOn()) {
+			for (Found f : all) {
+				if (f.ore() != Ore.DIAMOND && f.ore() != Ore.ANCIENT_DEBRIS) continue;
+				if (knownRare.add(f.ore().name() + (f.pos().getX() >> 4) + ":" + (f.pos().getZ() >> 4))) rareFound(f);
+			}
+		}
+	}
+
+	public void collect(List<Highlight> out) {
+		if (!isEnabled()) return;
+		HighlightStyle st = style();
+		for (Found f : targets) {
+			int rgb = colors.get(f.ore()).rgb((f.pos().getX() + f.pos().getZ() + f.pos().getY()) * 0.015f);
+			String label = null;
+			if (labels.isOn()) {
+				label = f.ore().label;
+				if (labelDistance.isOn() && mc.player != null) label += " " + Math.round(Math.sqrt(f.pos().distToCenterSqr(mc.player.position()))) + "m";
+			}
+			out.add(new Highlight(new AABB(f.pos()), rgb, st, label));
+		}
+	}
+
+	public List<Found> targets() { return targets; }
+	public boolean showHudCounts() { return hudCounts.isOn(); }
+	public BoolSetting oreSetting(Ore o) { return enabled.get(o); }
+	public ColorSetting colorSetting(Ore o) { return colors.get(o); }
+
+	public Map<Ore, Integer> counts() {
+		synchronized (counts) { return new EnumMap<>(counts); }
+	}
+}

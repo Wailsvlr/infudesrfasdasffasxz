@@ -1,0 +1,58 @@
+package com.wailsvlr.prism.util;
+
+import net.minecraft.client.multiplayer.ClientLevel;
+import net.minecraft.core.BlockPos;
+import net.minecraft.world.level.ChunkPos;
+import net.minecraft.world.level.block.entity.BlockEntity;
+import net.minecraft.world.level.chunk.LevelChunk;
+import net.minecraft.world.level.chunk.status.ChunkStatus;
+import net.minecraft.world.phys.Vec3;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.function.Predicate;
+
+/**
+ * Finds block entities in the chunks the client has loaded. Chests, shulker boxes, droppers and spawners are all
+ * block entities, so this never has to look at individual blocks.
+ */
+public final class BlockEntityScanner {
+	private BlockEntityScanner() { }
+
+	/** Block entities within {@code range} blocks (horizontal and vertical) of {@code center}, nearest first. */
+	public static List<BlockEntity> scan(ClientLevel level, Vec3 center, double range, Predicate<BlockEntity> filter) {
+		List<BlockEntity> out = new ArrayList<>();
+		int cx = (int) Math.floor(center.x) >> 4, cz = (int) Math.floor(center.z) >> 4;
+		int r = chunkRadius(range);
+		double r2 = range * range;
+		for (int x = cx - r; x <= cx + r; x++) {
+			for (int z = cz - r; z <= cz + r; z++) {
+				LevelChunk chunk = level.getChunkSource().getChunk(x, z, ChunkStatus.FULL, false);
+				if (chunk == null) continue;
+				for (BlockEntity be : chunk.getBlockEntities().values()) {
+					if (be.isRemoved() || !filter.test(be)) continue;
+					BlockPos p = be.getBlockPos();
+					double dx = p.getX() + 0.5 - center.x, dy = p.getY() + 0.5 - center.y, dz = p.getZ() + 0.5 - center.z;
+					if (dx * dx + dy * dy + dz * dz <= r2) out.add(be);
+				}
+			}
+		}
+		out.sort((a, b) -> Double.compare(a.getBlockPos().distToCenterSqr(center), b.getBlockPos().distToCenterSqr(center)));
+		return out;
+	}
+
+	/**
+	 * Chunks to walk for {@code range} blocks. Nothing outside the render distance is loaded on the client, so the
+	 * walk stops there; a huge range would otherwise mean millions of empty chunk lookups.
+	 */
+	public static int chunkRadius(double range) {
+		int loaded = net.minecraft.client.Minecraft.getInstance().options.getEffectiveRenderDistance() + 2;
+		return Math.min((int) Math.ceil(range / 16.0), loaded);
+	}
+
+	/** True when the chunk position of {@code pos} is loaded on the client. */
+	public static boolean isLoaded(ClientLevel level, BlockPos pos) {
+		ChunkPos cp = new ChunkPos(pos);
+		return level.getChunkSource().getChunk(cp.x, cp.z, ChunkStatus.FULL, false) != null;
+	}
+}

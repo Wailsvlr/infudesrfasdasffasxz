@@ -1,0 +1,191 @@
+package com.wailsvlr.prism;
+
+import com.mojang.blaze3d.platform.InputConstants;
+import com.wailsvlr.prism.gui.ClickGuiScreen;
+import com.wailsvlr.prism.gui.PrismHud;
+import com.wailsvlr.prism.module.Module;
+import com.wailsvlr.prism.module.ModuleManager;
+import com.wailsvlr.prism.modules.AuctionHelper;
+import com.wailsvlr.prism.modules.AutoSell;
+import com.wailsvlr.prism.modules.MoneyTracker;
+import com.wailsvlr.prism.modules.BaseHunter;
+import com.wailsvlr.prism.modules.BaseValue;
+import com.wailsvlr.prism.modules.BlockFinder;
+import com.wailsvlr.prism.modules.ClickGuiModule;
+import com.wailsvlr.prism.modules.ItemFinder;
+import com.wailsvlr.prism.modules.Freecam;
+import com.wailsvlr.prism.modules.Fullbright;
+import com.wailsvlr.prism.modules.HudModule;
+import com.wailsvlr.prism.modules.OreFinder;
+import com.wailsvlr.prism.modules.PlayerFinder;
+import com.wailsvlr.prism.modules.SpawnerFinder;
+import com.wailsvlr.prism.modules.StorageFinder;
+import com.wailsvlr.prism.modules.TrailFinder;
+import com.wailsvlr.prism.render.EspRenderer;
+import com.wailsvlr.prism.util.Config;
+import net.fabricmc.api.ClientModInitializer;
+import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
+import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
+import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
+import net.fabricmc.fabric.api.client.rendering.v1.hud.HudElementRegistry;
+import net.fabricmc.fabric.api.client.rendering.v1.world.WorldRenderEvents;
+import net.minecraft.client.KeyMapping;
+import net.minecraft.client.Minecraft;
+import net.minecraft.resources.Identifier;
+import org.lwjgl.glfw.GLFW;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.util.HashMap;
+import java.util.Map;
+
+public class PrismClient implements ClientModInitializer {
+	public static final String MOD_ID = "prismclient";
+	public static final Logger LOG = LoggerFactory.getLogger("Prism");
+
+	private static final ModuleManager MODULES = new ModuleManager();
+	private static final Config CONFIG = new Config();
+	private static KeyMapping guiKey, inspectKey, rtpKey, mapKey, sellKey, markKey, zoomKey;
+	private static final Map<Integer, Boolean> keyWasDown = new HashMap<>();
+	private static boolean pickWasDown;
+
+	public static ModuleManager modules() { return MODULES; }
+	public static Config config() { return CONFIG; }
+	public static KeyMapping guiKey() { return guiKey; }
+	public static KeyMapping zoomKey() { return zoomKey; }
+	public static KeyMapping sellKey() { return sellKey; }
+	public static KeyMapping markKey() { return markKey; }
+
+	@Override
+	public void onInitializeClient() {
+		StorageFinder storage = MODULES.register(new StorageFinder());
+		SpawnerFinder spawners = MODULES.register(new SpawnerFinder());
+		OreFinder ores = MODULES.register(new OreFinder());
+		PlayerFinder players = MODULES.register(new PlayerFinder());
+		BlockFinder blocks = MODULES.register(new BlockFinder());
+		ItemFinder items = MODULES.register(new ItemFinder());
+		TrailFinder trails = MODULES.register(new TrailFinder());
+		com.wailsvlr.prism.modules.ChunkFinder chunkFinder = MODULES.register(new com.wailsvlr.prism.modules.ChunkFinder());
+		BaseHunter hunter = MODULES.register(new BaseHunter());
+		AutoSell sell = MODULES.register(new AutoSell());
+		MODULES.register(new MoneyTracker());
+		BaseValue value = MODULES.register(new BaseValue());
+		AuctionHelper auction = MODULES.register(new AuctionHelper());
+		com.wailsvlr.prism.modules.ArmorView armorView = MODULES.register(new com.wailsvlr.prism.modules.ArmorView());
+		com.wailsvlr.prism.modules.Printer printer = MODULES.register(new com.wailsvlr.prism.modules.Printer());
+		MODULES.register(new Freecam());
+		com.wailsvlr.prism.modules.DeathPoint deathPoint = MODULES.register(new com.wailsvlr.prism.modules.DeathPoint());
+		MODULES.register(new com.wailsvlr.prism.modules.AutoTool());
+		MODULES.register(new com.wailsvlr.prism.modules.Zoom());
+		MODULES.register(new Fullbright());
+		MODULES.register(new com.wailsvlr.prism.modules.Fly());
+		MODULES.register(new com.wailsvlr.prism.modules.NoFall());
+		MODULES.register(new com.wailsvlr.prism.modules.Reach());
+		MODULES.register(new com.wailsvlr.prism.modules.Velocity());
+		MODULES.register(new HudModule());
+		MODULES.register(new ClickGuiModule());
+		CONFIG.load();
+
+		KeyMapping.Category category = KeyMapping.Category.register(Identifier.fromNamespaceAndPath(MOD_ID, "main"));
+		guiKey = KeyBindingHelper.registerKeyBinding(new KeyMapping("key.prismclient.clickgui", InputConstants.Type.KEYSYM, GLFW.GLFW_KEY_RIGHT_SHIFT, category));
+		inspectKey = KeyBindingHelper.registerKeyBinding(new KeyMapping("key.prismclient.inspect_base", InputConstants.Type.KEYSYM, GLFW.GLFW_KEY_I, category));
+		rtpKey = KeyBindingHelper.registerKeyBinding(new KeyMapping("key.prismclient.quick_rtp", InputConstants.Type.KEYSYM, GLFW.GLFW_KEY_R, category));
+		mapKey = KeyBindingHelper.registerKeyBinding(new KeyMapping("key.prismclient.heat_map", InputConstants.Type.KEYSYM, GLFW.GLFW_KEY_M, category));
+		sellKey = KeyBindingHelper.registerKeyBinding(new KeyMapping("key.prismclient.auto_sell", InputConstants.Type.KEYSYM, GLFW.GLFW_KEY_O, category));
+		zoomKey = KeyBindingHelper.registerKeyBinding(new KeyMapping("key.prismclient.zoom", InputConstants.Type.KEYSYM, GLFW.GLFW_KEY_C, category));
+		markKey = KeyBindingHelper.registerKeyBinding(new KeyMapping("key.prismclient.mark_sell", InputConstants.Type.KEYSYM, GLFW.GLFW_KEY_K, category));
+
+		// AutoSell: mark items in any inventory with the mark key (the green frames come from AbstractContainerScreenMixin)
+		net.fabricmc.fabric.api.client.screen.v1.ScreenEvents.AFTER_INIT.register((client, screen, w, h) -> {
+			if (!(screen instanceof net.minecraft.client.gui.screens.inventory.AbstractContainerScreen<?>)) return;
+			if (screen instanceof net.minecraft.client.gui.screens.inventory.CrafterScreen cs) printer.guide0().addButton(cs);
+			net.fabricmc.fabric.api.client.screen.v1.ScreenKeyboardEvents.afterKeyPress(screen).register((s, key) -> {
+				if (markKey.matches(key)) sell.onMarkKey(s);
+			});
+		});
+
+		ClientTickEvents.END_CLIENT_TICK.register(PrismClient::tick);
+
+		EspRenderer.addSource("storage", storage::collect);
+		EspRenderer.addSource("spawners", spawners::collect);
+		EspRenderer.addSource("ores", ores::collect);
+		EspRenderer.addSource("players", players::collect);
+		EspRenderer.addSource("blocks", blocks::collect);
+		EspRenderer.addSource("items", items::collect);
+		EspRenderer.addSource("trails", trails::collect);
+		EspRenderer.addSource("chunkFinder", chunkFinder::collect);
+		EspRenderer.addSource("value", value::collect);
+		EspRenderer.addSource("printer", printer::collect);
+		WorldRenderEvents.END_MAIN.register(EspRenderer::render);
+		HudElementRegistry.addLast(Identifier.fromNamespaceAndPath(MOD_ID, "hud"), PrismHud::render);
+		HudElementRegistry.addLast(Identifier.fromNamespaceAndPath(MOD_ID, "armor_view"), armorView::render);
+		HudElementRegistry.addLast(Identifier.fromNamespaceAndPath(MOD_ID, "notifications"), com.wailsvlr.prism.gui.Notifications::render);
+		HudElementRegistry.addLast(Identifier.fromNamespaceAndPath(MOD_ID, "pointers"), com.wailsvlr.prism.gui.Pointers::render);
+		// the vanilla effect icons step aside while the HUD's effects card shows them
+		HudElementRegistry.replaceElement(net.fabricmc.fabric.api.client.rendering.v1.hud.VanillaHudElements.STATUS_EFFECTS,
+			vanillaEffects -> (vanillaG, vanillaDelta) -> { if (!com.wailsvlr.prism.gui.PrismHud.replacesVanillaEffects()) vanillaEffects.render(vanillaG, vanillaDelta); });
+		EspRenderer.addSource("deathPoint", deathPoint::collect);
+
+		ClientLifecycleEvents.CLIENT_STOPPING.register(mc -> { CONFIG.save(); auction.savePrices(); });
+		// BaseValue learns what base chests hold from the ones you open (which block was clicked)
+		net.fabricmc.fabric.api.event.player.UseBlockCallback.EVENT.register((player, world, hand, hit) -> {
+			if (world.isClientSide()) value.onUseBlock(hit.getBlockPos());
+			return net.minecraft.world.InteractionResult.PASS;
+		});
+		// AuctionHelper: remembered auction prices in item tooltips
+		net.fabricmc.fabric.api.client.item.v1.ItemTooltipCallback.EVENT.register((stack, context, flag, lines) -> auction.tooltip(stack, lines));
+		// TrailFinder: chunks arriving with liquids already flowing were loaded by someone before
+		net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientChunkEvents.CHUNK_LOAD.register(trails::onChunkLoad);
+		net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents.DISCONNECT.register((handler, mc) -> trails.clear());
+		// BaseHunter reads "wait N seconds" cooldowns from server messages (chat and action bar)
+		net.fabricmc.fabric.api.client.message.v1.ClientReceiveMessageEvents.GAME.register((message, overlay) -> hunter.onServerMessage(message.getString()));
+		LOG.info("Legit Client ready: {} modules", MODULES.all().size());
+	}
+
+	private static void tick(Minecraft mc) {
+		while (guiKey.consumeClick()) {
+			if (mc.screen == null) mc.setScreen(new ClickGuiScreen());
+		}
+		while (inspectKey.consumeClick()) {
+			if (mc.screen == null && mc.player != null) MODULES.get(BlockFinder.class).inspectNext();
+		}
+		while (mapKey.consumeClick()) {
+			if (mc.screen == null && mc.player != null) mc.setScreen(new com.wailsvlr.prism.gui.HeatMapScreen());
+		}
+		while (sellKey.consumeClick()) {
+			if (mc.screen == null && mc.player != null) MODULES.get(AutoSell.class).sellNow();
+		}
+		while (markKey.consumeClick()) { }   // handled inside inventories
+		MODULES.get(AutoSell.class).tick();
+		while (rtpKey.consumeClick()) {
+			if (mc.screen == null && mc.player != null) MODULES.get(BaseHunter.class).quickRtp();
+		}
+		MODULES.get(BaseHunter.class).watchQuickRtp();
+		MODULES.get(BaseHunter.class).watchShow();
+		// module keybinds only work in game (not while typing in chat or a menu)
+		if (mc.screen == null && mc.player != null) {
+			for (Module m : MODULES.all()) {
+				int key = m.getKey();
+				if (key == GLFW.GLFW_KEY_UNKNOWN) continue;
+				boolean down = InputConstants.isKeyDown(mc.getWindow(), key);
+				if (down && !keyWasDown.getOrDefault(key, false)) m.toggle();
+				keyWasDown.put(key, down);
+			}
+		} else {
+			keyWasDown.clear();
+		}
+		// friends: middle click a player
+		boolean pick = mc.options.keyPickItem.isDown();
+		if (pick && !pickWasDown && mc.screen == null && mc.player != null && MODULES.get(ClickGuiModule.class).middleClickFriends.isOn()
+			&& mc.crosshairPickEntity instanceof net.minecraft.world.entity.player.Player pl && pl != mc.player) {
+			String n = pl.getGameProfile().name();
+			boolean nowFriend = com.wailsvlr.prism.util.Friends.toggle(n);
+			mc.gui.getChat().addMessage(net.minecraft.network.chat.Component.literal("[Legit] ").withStyle(net.minecraft.ChatFormatting.LIGHT_PURPLE)
+				.append(net.minecraft.network.chat.Component.literal(n + (nowFriend ? " is now your friend" : " is no longer your friend"))
+					.withStyle(nowFriend ? net.minecraft.ChatFormatting.GREEN : net.minecraft.ChatFormatting.GRAY)));
+		}
+		pickWasDown = pick;
+		MODULES.tick();
+		MODULES.get(Fullbright.class).animate();
+	}
+}

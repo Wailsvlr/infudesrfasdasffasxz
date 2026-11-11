@@ -1,0 +1,10 @@
+{
+	"key.prismclient.clickgui": "Open ClickGUI",
+	"key.prismclient.inspect_base": "Inspect next base (Freecam)",
+	"key.prismclient.quick_rtp": "Quick RTP (BaseHunter dimension)",
+	"key.prismclient.heat_map": "Heat map of hunted areas",
+	"key.prismclient.auto_sell": "AutoSell: /sell and fill it",
+	"key.prismclient.mark_sell": "AutoSell: mark / unmark hovered item",
+	"key.prismclient.zoom": "Zoom (hold)",
+	"key.category.prismclient.main": "Legit Client"
+}

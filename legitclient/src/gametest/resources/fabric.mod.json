@@ -1,0 +1,24 @@
+{
+	"schemaVersion": 1,
+	"id": "prismclient-test",
+	"version": "1.0.0",
+	"name": "Prism Client tests",
+	"environment": "client",
+	"entrypoints": {
+		"main": [
+			"com.wailsvlr.prism.test.TestServerCommands"
+		],
+		"fabric-client-gametest": [
+			"com.wailsvlr.prism.test.PrismClientGameTest",
+			"com.wailsvlr.prism.test.PrinterGameTest",
+			"com.wailsvlr.prism.test.PrinterServerGameTest",
+			"com.wailsvlr.prism.test.GuiGameTest",
+			"com.wailsvlr.prism.test.FeaturesGameTest",
+			"com.wailsvlr.prism.test.PerfGameTest",
+			"com.wailsvlr.prism.test.KelpSimGameTest"
+		]
+	},
+	"depends": {
+		"prismclient": "*"
+	}
+}
