@@ -1,59 +1,83 @@
 package com.wailsvlr.prism.modules;
 
+import com.wailsvlr.prism.module.Category;
+import com.wailsvlr.prism.module.Module;
+import com.wailsvlr.prism.setting.ModeSetting;
+import com.wailsvlr.prism.setting.NumberSetting;
+import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
-import net.minecraft.client.player.LocalPlayer;
+import net.minecraft.world.phys.Vec3;
 
-/** Creative-style flight (double-tap jump), with a local-player path for remote servers. */
-public class Fly extends SingleplayerModule {
-	private LocalPlayer remotePlayer;
-	private boolean previousMayfly;
-	private boolean previousFlying;
+public final class Fly extends Module {
+    private final ModeSetting mode;
+    private final NumberSetting speed;
+    private boolean wasMayfly, wasFlying;
 
-	public Fly() {
-		super("Fly", "Fly like in creative: double-tap jump. Multiplayer flight is subject to server movement checks");
-	}
+    public Fly() {
+        super("Fly", "Flight in singleplayer and multiplayer", Category.MISC);
+        mode = add(new ModeSetting("Mode", "Flight technique", "Vanilla", "Vanilla", "Glide"));
+        speed = add(new NumberSetting("Speed", "Flight speed multiplier", 1.0, 0.2, 5.0, 0.1, "x"));
+    }
 
-	@Override
-	protected void onEnable() { onTick(); }
+    @Override
+    protected void onEnable() {
+        if (mc.player == null) return;
+        wasMayfly = mc.player.getAbilities().mayfly;
+        wasFlying = mc.player.getAbilities().flying;
+    }
 
-	@Override
-	public String getInfo() { return mc.player != null && world() == null ? "MP" : null; }
+    @Override
+    public void onTick() {
+        if (mc.player == null) return;
 
-	@Override
-	public void onTick() {
-		// re-applied every tick: dying, changing dimension or game mode resets the abilities
-		if (onPlayer(p -> {
-			if (!p.getAbilities().mayfly) {
-				p.getAbilities().mayfly = true;
-				p.onUpdateAbilities();
-			}
-		})) return;
-		LocalPlayer p = mc.player;
-		if (p == null) { remotePlayer = null; return; }
-		if (remotePlayer != p) {
-			remotePlayer = p;
-			previousMayfly = p.getAbilities().mayfly;
-			previousFlying = p.getAbilities().flying;
-		}
-		p.getAbilities().mayfly = true;
-	}
+        MinecraftServer server = mc.getSingleplayerServer();
+        if (server != null && !server.isPublished()) {
+            java.util.UUID id = mc.player.getUUID();
+            server.execute(() -> {
+                ServerPlayer sp = server.getPlayerList().getPlayer(id);
+                if (sp != null && !sp.getAbilities().mayfly) {
+                    sp.getAbilities().mayfly = true;
+                    sp.onUpdateAbilities();
+                }
+            });
+            return;
+        }
 
-	@Override
-	protected void onDisable() {
-		onPlayer(Fly::land);
-		LocalPlayer p = mc.player;
-		if (p != null && p == remotePlayer && !p.isCreative() && !p.isSpectator()) {
-			p.getAbilities().mayfly = previousMayfly;
-			p.getAbilities().flying = previousMayfly && previousFlying;
-			p.onUpdateAbilities();
-		}
-		remotePlayer = null;
-	}
+        if (mode.is("Vanilla")) {
+            mc.player.getAbilities().mayfly = true;
+            mc.player.getAbilities().setFlyingSpeed((float) (0.05 * speed.get()));
+        } else {
+            Vec3 v = mc.player.getDeltaMovement();
+            double glideSpeed = -0.04 / speed.get();
+            if (v.y < glideSpeed) {
+                mc.player.setDeltaMovement(v.x, glideSpeed, v.z);
+            }
+            mc.player.fallDistance = 0;
+        }
+    }
 
-	private static void land(ServerPlayer p) {
-		if (p.isCreative() || p.isSpectator()) return;
-		p.getAbilities().mayfly = false;
-		p.getAbilities().flying = false;
-		p.onUpdateAbilities();
-	}
+    @Override
+    protected void onDisable() {
+        MinecraftServer server = mc.getSingleplayerServer();
+        if (server != null && !server.isPublished() && mc.player != null) {
+            java.util.UUID id = mc.player.getUUID();
+            server.execute(() -> {
+                ServerPlayer sp = server.getPlayerList().getPlayer(id);
+                if (sp != null && !sp.isCreative() && !sp.isSpectator()) {
+                    sp.getAbilities().mayfly = false;
+                    sp.getAbilities().flying = false;
+                    sp.onUpdateAbilities();
+                }
+            });
+        }
+        if (mc.player != null && !mc.player.isCreative() && !mc.player.isSpectator()) {
+            mc.player.getAbilities().mayfly = wasMayfly;
+            mc.player.getAbilities().flying = wasMayfly && wasFlying;
+            mc.player.getAbilities().setFlyingSpeed(0.05f);
+            mc.player.onUpdateAbilities();
+        }
+    }
+
+    @Override
+    public String getInfo() { return mode.get(); }
 }
