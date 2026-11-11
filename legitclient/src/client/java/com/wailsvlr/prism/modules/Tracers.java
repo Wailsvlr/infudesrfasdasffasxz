@@ -8,6 +8,7 @@ import com.wailsvlr.prism.setting.BoolSetting;
 import com.wailsvlr.prism.setting.NumberSetting;
 import net.fabricmc.fabric.api.client.rendering.v1.world.WorldRenderContext;
 import net.minecraft.client.renderer.MultiBufferSource;
+import com.wailsvlr.prism.render.EspPipelines;
 import net.minecraft.client.renderer.rendertype.RenderType;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
@@ -42,7 +43,7 @@ public final class Tracers extends Module {
         MultiBufferSource consumers = ctx.consumers();
         Matrix4f matrix = pose.pose();
 
-        VertexConsumer lines = consumers.getBuffer(RenderType.lines());
+        VertexConsumer lines = consumers.getBuffer(EspPipelines.lines(true));
 
         for (Entity e : mc.level.entitiesForRendering()) {
             if (e == mc.player) continue;
@@ -76,7 +77,7 @@ public final class Tracers extends Module {
         }
 
         if (consumers instanceof MultiBufferSource.BufferSource bs) {
-            bs.endBatch(RenderType.lines());
+            bs.endBatch(EspPipelines.lines(true));
         }
     }
 

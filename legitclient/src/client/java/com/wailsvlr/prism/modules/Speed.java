@@ -24,8 +24,8 @@ public final class Speed extends Module {
         if (mc.player.isFallFlying() || mc.player.isPassenger()) return;
         if (mc.player.isInWater() || mc.player.isInLava()) return;
 
-        float forward = mc.player.input.forwardImpulse;
-        float strafe = mc.player.input.leftImpulse;
+        float forward = (mc.options.keyUp.isDown() ? 1f : 0f) - (mc.options.keyDown.isDown() ? 1f : 0f);
+        float strafe = (mc.options.keyLeft.isDown() ? 1f : 0f) - (mc.options.keyRight.isDown() ? 1f : 0f);
         if (forward == 0 && strafe == 0) return;
 
         double mult = speed.get();

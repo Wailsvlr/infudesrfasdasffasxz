@@ -31,13 +31,13 @@ public final class Scaffold extends Module {
         int blockSlot = findBlockSlot();
         if (blockSlot == -1) return;
 
-        int prevSlot = mc.player.getInventory().selected;
+        int prevSlot = mc.player.getInventory().getSelectedSlot();
 
         BlockPos below = mc.player.blockPosition().below();
         boolean placed = false;
 
         if (mc.level.getBlockState(below).isAir()) {
-            mc.player.getInventory().selected = blockSlot;
+            mc.player.getInventory().setSelectedSlot(blockSlot);
             placed = placeBlock(below);
         }
 
@@ -49,7 +49,7 @@ public final class Scaffold extends Module {
             for (int i = 1; i <= ext; i++) {
                 BlockPos ahead = below.offset((int) (dx * i), 0, (int) (dz * i));
                 if (mc.level.getBlockState(ahead).isAir()) {
-                    mc.player.getInventory().selected = blockSlot;
+                    mc.player.getInventory().setSelectedSlot(blockSlot);
                     if (placeBlock(ahead)) placed = true;
                 }
             }
@@ -65,7 +65,7 @@ public final class Scaffold extends Module {
         if (placed) {
             mc.player.swing(InteractionHand.MAIN_HAND);
         }
-        mc.player.getInventory().selected = prevSlot;
+        mc.player.getInventory().setSelectedSlot(prevSlot);
     }
 
     private boolean placeBlock(BlockPos pos) {

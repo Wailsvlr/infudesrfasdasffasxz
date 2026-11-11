@@ -20,12 +20,13 @@ public final class Sprint extends Module {
         if (mc.player.getFoodData().getFoodLevel() <= 6) return;
 
         if (mode.is("Legit")) {
-            if (mc.player.input.forwardImpulse > 0 && !mc.player.horizontalCollision
+            if (mc.options.keyUp.isDown() && !mc.player.horizontalCollision
                     && !mc.player.isCrouching() && !mc.player.isUsingItem()) {
                 mc.player.setSprinting(true);
             }
         } else {
-            if (mc.player.input.forwardImpulse != 0 || mc.player.input.leftImpulse != 0) {
+            if (mc.options.keyUp.isDown() || mc.options.keyDown.isDown()
+                    || mc.options.keyLeft.isDown() || mc.options.keyRight.isDown()) {
                 mc.player.setSprinting(true);
             }
         }

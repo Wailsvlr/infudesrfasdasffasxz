@@ -38,7 +38,7 @@ public final class Backtrack extends Module {
         if (mc.player == null || mc.player.connection == null) return;
 
         long now = System.currentTimeMillis();
-        long delayMs = (long) delay.get();
+        long delayMs = delay.get().longValue();
 
         while (!queue.isEmpty() && now - queue.peek().time >= delayMs) {
             DelayedPacket dp = queue.poll();

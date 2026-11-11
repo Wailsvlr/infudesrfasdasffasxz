@@ -19,7 +19,7 @@ public final class AntiVoid extends Module {
     public void onTick() {
         if (mc.player == null || mc.level == null) return;
 
-        int minY = mc.level.getMinBuildHeight();
+        int minY = mc.level.getMinY();
 
         if (mc.player.onGround() && mc.player.getY() > minY + 3) {
             safePos = mc.player.position();
