@@ -1,0 +1,21 @@
+{
+    "schemaVersion": 1,
+    "id": "donutclient",
+    "version": "${version}",
+    "name": "Donut Client",
+    "description": "Minecraft utility mod",
+    "authors": ["donut"],
+    "contact": {},
+    "license": "MIT",
+    "icon": "assets/donutclient/icon.png",
+    "environment": "client",
+    "entrypoints": {
+        "client": ["dev.donut.client.DonutClient"]
+    },
+    "mixins": ["donutclient.mixins.json"],
+    "depends": {
+        "fabricloader": ">=0.16.0",
+        "minecraft": "~1.21.1",
+        "java": ">=21"
+    }
+}

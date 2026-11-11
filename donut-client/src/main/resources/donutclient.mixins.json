@@ -1,0 +1,19 @@
+{
+    "required": true,
+    "package": "dev.donut.client.mixin",
+    "compatibilityLevel": "JAVA_21",
+    "client": [
+        "MixinClientPlayerEntity",
+        "MixinLivingEntity",
+        "MixinGameRenderer",
+        "MixinMinecraftClient",
+        "MixinClientPlayerInteractionManager",
+        "MixinClientConnection",
+        "MixinLightmapTextureManager",
+        "MixinKeyboardInput",
+        "MixinInGameHud"
+    ],
+    "injectors": {
+        "defaultRequire": 0
+    }
+}
