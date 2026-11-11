@@ -17,29 +17,34 @@ public final class Velocity extends Module {
     public Velocity() {
         super("Velocity", "Reduces knockback with anticheat bypass", Category.COMBAT);
         instance = this;
-        mode = add(new ModeSetting("Mode", "Bypass technique", "Reverse", "Percentage", "Reverse", "Smooth"));
-        horizontal = add(new NumberSetting("Horizontal", "Horizontal knockback retained", 80, 0, 100, 5, "%"));
-        vertical = add(new NumberSetting("Vertical", "Vertical knockback retained", 100, 0, 100, 5, "%"));
+        mode = add(new ModeSetting("Mode", "Bypass technique", "Jump", "Jump", "Reduce", "Cancel"));
+        horizontal = add(new NumberSetting("Horizontal", "Horizontal KB % (Reduce)", 85, 0, 100, 5, "%"));
+        vertical = add(new NumberSetting("Vertical", "Vertical KB % (Reduce)", 100, 0, 100, 5, "%"));
     }
 
     public static Vec3 scale(Vec3 motion) {
         if (instance == null || !instance.isEnabled()) return motion;
 
-        double hPct = instance.horizontal.get() / 100.0;
-        double vPct = instance.vertical.get() / 100.0;
+        String m = instance.mode.get();
 
-        if (instance.mode.is("Percentage")) {
-            double jitter = 0.97 + Math.random() * 0.06;
-            return new Vec3(
-                    motion.x * hPct * jitter,
-                    motion.y * vPct,
-                    motion.z * hPct * jitter
-            );
+        if (m.equals("Jump")) {
+            instance.hit = true;
+            instance.ticksSinceHit = 0;
+            return motion;
         }
 
-        instance.hit = true;
-        instance.ticksSinceHit = 0;
-        return motion;
+        if (m.equals("Cancel")) {
+            return Vec3.ZERO;
+        }
+
+        double hPct = instance.horizontal.get() / 100.0;
+        double vPct = instance.vertical.get() / 100.0;
+        double jitter = 0.97 + Math.random() * 0.06;
+        return new Vec3(
+                motion.x * hPct * jitter,
+                motion.y * vPct,
+                motion.z * hPct * jitter
+        );
     }
 
     @Override
@@ -47,37 +52,25 @@ public final class Velocity extends Module {
         if (!hit || mc.player == null) return;
         ticksSinceHit++;
 
-        double hPct = horizontal.get() / 100.0;
-        double vPct = vertical.get() / 100.0;
-        Vec3 current = mc.player.getDeltaMovement();
-
-        if (mode.is("Reverse") && ticksSinceHit == 1) {
-            double jitter = 0.97 + Math.random() * 0.06;
-            mc.player.setDeltaMovement(
-                    current.x * hPct * jitter,
-                    current.y * vPct,
-                    current.z * hPct * jitter
-            );
+        if (mode.is("Jump") && ticksSinceHit == 1) {
+            mc.player.setSprinting(true);
+            if (mc.player.onGround()) {
+                Vec3 v = mc.player.getDeltaMovement();
+                mc.player.setDeltaMovement(v.x, 0.42, v.z);
+            }
             hit = false;
-        } else if (mode.is("Smooth") && ticksSinceHit <= 3) {
-            double factor = 1.0 - ((1.0 - hPct) * ticksSinceHit / 3.0);
-            double jitter = 0.98 + Math.random() * 0.04;
-            mc.player.setDeltaMovement(
-                    current.x * factor * jitter,
-                    current.y * (ticksSinceHit == 1 ? vPct : 1.0),
-                    current.z * factor * jitter
-            );
-            if (ticksSinceHit >= 3) hit = false;
         }
 
         if (ticksSinceHit > 5) hit = false;
     }
 
     @Override
-    protected void onDisable() {
-        hit = false;
-    }
+    protected void onDisable() { hit = false; }
 
     @Override
-    public String getInfo() { return mode.get() + " " + horizontal.display() + "/" + vertical.display(); }
+    public String getInfo() {
+        if (mode.is("Jump")) return "Jump";
+        if (mode.is("Cancel")) return "Cancel";
+        return horizontal.display() + "/" + vertical.display();
+    }
 }

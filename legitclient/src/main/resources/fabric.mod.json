@@ -2,7 +2,7 @@
 	"schemaVersion": 1,
 	"id": "prismclient",
 	"version": "${version}",
-	"name": "Legit Client",
+	"name": "LIMP Client",
 	"description": "Client-side utility mod: ClickGUI, StorageFinder and SpawnerFinder.",
 	"authors": ["Wailsvlr"],
 	"license": "All-Rights-Reserved",

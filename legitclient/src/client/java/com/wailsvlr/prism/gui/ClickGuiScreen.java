@@ -74,7 +74,7 @@ public class ClickGuiScreen extends net.minecraft.client.gui.screens.Screen {
 	private float dt;
 
 	public ClickGuiScreen() {
-		super(Component.literal("Legit ClickGUI"));
+		super(Component.literal("LIMP ClickGUI"));
 		this.theme = PrismClient.modules().get(ClickGuiModule.class);
 	}
 

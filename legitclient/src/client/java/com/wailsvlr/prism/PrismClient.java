@@ -41,7 +41,7 @@ import java.util.Map;
 
 public class PrismClient implements ClientModInitializer {
 	public static final String MOD_ID = "prismclient";
-	public static final Logger LOG = LoggerFactory.getLogger("Prism");
+	public static final Logger LOG = LoggerFactory.getLogger("LIMP");
 
 	private static final ModuleManager MODULES = new ModuleManager();
 	private static final Config CONFIG = new Config();
@@ -139,7 +139,7 @@ public class PrismClient implements ClientModInitializer {
 		net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents.DISCONNECT.register((handler, mc) -> trails.clear());
 		// BaseHunter reads "wait N seconds" cooldowns from server messages (chat and action bar)
 		net.fabricmc.fabric.api.client.message.v1.ClientReceiveMessageEvents.GAME.register((message, overlay) -> hunter.onServerMessage(message.getString()));
-		LOG.info("Legit Client ready: {} modules", MODULES.all().size());
+		LOG.info("LIMP Client ready: {} modules", MODULES.all().size());
 	}
 
 	private static void tick(Minecraft mc) {
@@ -180,7 +180,7 @@ public class PrismClient implements ClientModInitializer {
 			&& mc.crosshairPickEntity instanceof net.minecraft.world.entity.player.Player pl && pl != mc.player) {
 			String n = pl.getGameProfile().name();
 			boolean nowFriend = com.wailsvlr.prism.util.Friends.toggle(n);
-			mc.gui.getChat().addMessage(net.minecraft.network.chat.Component.literal("[Legit] ").withStyle(net.minecraft.ChatFormatting.LIGHT_PURPLE)
+			mc.gui.getChat().addMessage(net.minecraft.network.chat.Component.literal("[LIMP] ").withStyle(net.minecraft.ChatFormatting.LIGHT_PURPLE)
 				.append(net.minecraft.network.chat.Component.literal(n + (nowFriend ? " is now your friend" : " is no longer your friend"))
 					.withStyle(nowFriend ? net.minecraft.ChatFormatting.GREEN : net.minecraft.ChatFormatting.GRAY)));
 		}
