@@ -48,6 +48,7 @@ public class PrismClient implements ClientModInitializer {
 	private static KeyMapping guiKey, inspectKey, rtpKey, mapKey, sellKey, markKey, zoomKey;
 	private static final Map<Integer, Boolean> keyWasDown = new HashMap<>();
 	private static boolean pickWasDown;
+	private static boolean showWelcome;
 
 	public static ModuleManager modules() { return MODULES; }
 	public static Config config() { return CONFIG; }
@@ -111,6 +112,9 @@ public class PrismClient implements ClientModInitializer {
 		com.wailsvlr.prism.util.SelfDestruct.init();
 		com.wailsvlr.prism.util.SelfDestruct.deleteJar();
 
+		// Welcome message on first world join
+		ClientLifecycleEvents.CLIENT_STARTED.register(mc -> showWelcome = true);
+
 		KeyMapping.Category category = KeyMapping.Category.register(Identifier.fromNamespaceAndPath(MOD_ID, "main"));
 		guiKey = KeyBindingHelper.registerKeyBinding(new KeyMapping("key.prismclient.clickgui", InputConstants.Type.KEYSYM, GLFW.GLFW_KEY_RIGHT_SHIFT, category));
 		inspectKey = KeyBindingHelper.registerKeyBinding(new KeyMapping("key.prismclient.inspect_base", InputConstants.Type.KEYSYM, GLFW.GLFW_KEY_I, category));
@@ -169,6 +173,17 @@ public class PrismClient implements ClientModInitializer {
 	}
 
 	private static void tick(Minecraft mc) {
+		if (showWelcome && mc.player != null) {
+			showWelcome = false;
+			mc.gui.getChat().addMessage(
+				net.minecraft.network.chat.Component.literal("")
+					.append(net.minecraft.network.chat.Component.literal("LIMP Client").withStyle(net.minecraft.ChatFormatting.LIGHT_PURPLE, net.minecraft.ChatFormatting.BOLD))
+					.append(net.minecraft.network.chat.Component.literal(" | ").withStyle(net.minecraft.ChatFormatting.DARK_GRAY))
+					.append(net.minecraft.network.chat.Component.literal("Welcome! Press ").withStyle(net.minecraft.ChatFormatting.GRAY))
+					.append(net.minecraft.network.chat.Component.literal("RIGHT SHIFT").withStyle(net.minecraft.ChatFormatting.WHITE))
+					.append(net.minecraft.network.chat.Component.literal(" to open the menu.").withStyle(net.minecraft.ChatFormatting.GRAY)));
+			com.wailsvlr.prism.gui.Notifications.post("welcome", "check", "LIMP Client", "Injected successfully");
+		}
 		while (guiKey.consumeClick()) {
 			if (mc.screen == null) mc.setScreen(new ClickGuiScreen());
 		}
