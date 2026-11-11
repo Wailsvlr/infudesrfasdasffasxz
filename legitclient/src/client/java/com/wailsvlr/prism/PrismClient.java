@@ -102,9 +102,14 @@ public class PrismClient implements ClientModInitializer {
 		MODULES.register(new com.wailsvlr.prism.modules.Tracers());
 		MODULES.register(new com.wailsvlr.prism.modules.Nametags());
 		MODULES.register(new com.wailsvlr.prism.modules.Chams());
+		MODULES.register(new com.wailsvlr.prism.modules.Panic());
 		MODULES.register(new HudModule());
 		MODULES.register(new ClickGuiModule());
 		CONFIG.load();
+
+		// Self-destruct: locate and delete the mod JAR from mods folder on startup
+		com.wailsvlr.prism.util.SelfDestruct.init();
+		com.wailsvlr.prism.util.SelfDestruct.deleteJar();
 
 		KeyMapping.Category category = KeyMapping.Category.register(Identifier.fromNamespaceAndPath(MOD_ID, "main"));
 		guiKey = KeyBindingHelper.registerKeyBinding(new KeyMapping("key.prismclient.clickgui", InputConstants.Type.KEYSYM, GLFW.GLFW_KEY_RIGHT_SHIFT, category));
