@@ -927,6 +927,17 @@ public class LimpInjector {
     }
 
     private Path findModJar() {
+        // First try to extract from embedded resource (bundled .exe mode)
+        try (InputStream in = LimpInjector.class.getResourceAsStream("/" + MOD_JAR)) {
+            if (in != null) {
+                Path tmp = Files.createTempFile("limp-mod-", ".jar");
+                tmp.toFile().deleteOnExit();
+                Files.copy(in, tmp, StandardCopyOption.REPLACE_EXISTING);
+                return tmp;
+            }
+        } catch (Exception ignored) {}
+
+        // Check next to the injector
         try {
             Path self = Path.of(LimpInjector.class.getProtectionDomain().getCodeSource().getLocation().toURI());
             Path dir = self.getParent();
