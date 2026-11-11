@@ -60,8 +60,37 @@ public class LimpInjector {
     }
 
     public static void main(String[] args) {
-        System.setProperty("sun.java2d.opengl", "true");
-        SwingUtilities.invokeLater(() -> new LimpInjector().createUI());
+        try {
+            SwingUtilities.invokeAndWait(new Runnable() {
+                public void run() {
+                    try {
+                        new LimpInjector().createUI();
+                    } catch (Throwable t) {
+                        StringBuilder sb = new StringBuilder();
+                        sb.append(t.toString());
+                        for (StackTraceElement e : t.getStackTrace()) {
+                            sb.append("\n  at ").append(e.toString());
+                            if (sb.length() > 800) break;
+                        }
+                        JOptionPane.showMessageDialog(null, sb.toString(), "LIMP Client - Error", JOptionPane.ERROR_MESSAGE);
+                        System.exit(1);
+                    }
+                }
+            });
+        } catch (Throwable t) {
+            StringBuilder sb = new StringBuilder();
+            sb.append(t.toString());
+            Throwable cause = t.getCause();
+            if (cause != null) {
+                sb.append("\nCaused by: ").append(cause.toString());
+                for (StackTraceElement e : cause.getStackTrace()) {
+                    sb.append("\n  at ").append(e.toString());
+                    if (sb.length() > 800) break;
+                }
+            }
+            JOptionPane.showMessageDialog(null, sb.toString(), "LIMP Client - Startup Error", JOptionPane.ERROR_MESSAGE);
+            System.exit(1);
+        }
     }
 
     private void createUI() {
