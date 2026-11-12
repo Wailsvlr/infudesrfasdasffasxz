@@ -374,22 +374,49 @@ public class LimpInjector {
         card.add(descLbl);
         card.add(Box.createVerticalGlue());
 
-        // Minecraft status
-        mcStatusLabel = new JLabel(detectedModsDir != null ? "  Minecraft detected" : "  " + detectedName);
+        // Profile selector
+        mcStatusLabel = new JLabel(detectedModsDir != null ? "  Profile:" : "  " + detectedName);
         mcStatusLabel.setFont(new Font("SansSerif", Font.PLAIN, 11));
-        mcStatusLabel.setForeground(detectedModsDir != null ? GREEN : TEXT_DIM);
+        mcStatusLabel.setForeground(detectedModsDir != null ? GREEN : RED);
         mcStatusLabel.setAlignmentX(0);
         card.add(mcStatusLabel);
+        card.add(Box.createVerticalStrut(3));
+
+        if (profileNames.size() > 1) {
+            // Multiple profiles found — show combo box
+            profileCombo = new JComboBox<>(profileNames.toArray(new String[0]));
+            // Select the auto-detected one
+            for (int i = 0; i < profilePaths.size(); i++) {
+                if (profilePaths.get(i).equals(detectedModsDir)) {
+                    profileCombo.setSelectedIndex(i);
+                    break;
+                }
+            }
+            profileCombo.setFont(new Font("SansSerif", Font.PLAIN, 11));
+            profileCombo.setBackground(BG_ITEM);
+            profileCombo.setForeground(TEXT_WHITE);
+            profileCombo.setMaximumSize(new Dimension(300, 28));
+            profileCombo.setAlignmentX(0);
+            profileCombo.addActionListener(e -> {
+                int idx = profileCombo.getSelectedIndex();
+                if (idx >= 0 && idx < profilePaths.size()) {
+                    detectedModsDir = profilePaths.get(idx);
+                    detectedName = profileNames.get(idx);
+                    if (mcPathLabel != null) mcPathLabel.setText(detectedModsDir.toString());
+                }
+            });
+            card.add(profileCombo);
+        }
         card.add(Box.createVerticalStrut(3));
 
         JPanel pathRow = new JPanel(new BorderLayout(4, 0));
         pathRow.setOpaque(false);
         pathRow.setAlignmentX(0);
-        mcPathLabel = new JLabel(detectedModsDir != null ? detectedModsDir.getParent().toString() : "");
+        mcPathLabel = new JLabel(detectedModsDir != null ? detectedModsDir.toString() : "Not found");
         mcPathLabel.setFont(new Font("SansSerif", Font.PLAIN, 9));
         mcPathLabel.setForeground(TEXT_DIM);
         pathRow.add(mcPathLabel, BorderLayout.CENTER);
-        JLabel changeBtn = new JLabel("[Change]");
+        JLabel changeBtn = new JLabel("[Browse]");
         changeBtn.setFont(new Font("SansSerif", Font.PLAIN, 9));
         changeBtn.setForeground(ACCENT_LIGHT);
         changeBtn.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
@@ -1171,38 +1198,33 @@ public class LimpInjector {
         overlay.add(check);
         overlay.add(Box.createVerticalStrut(24));
 
-        String titleText = liveInjected ? "LIMP Client Injected Live!" : "LIMP Client Installed";
+        String titleText = "LIMP Client Installed!";
         JLabel suc1 = new JLabel(titleText);
         suc1.setFont(new Font("SansSerif", Font.BOLD, 24));
         suc1.setForeground(TEXT_WHITE);
         suc1.setAlignmentX(Component.CENTER_ALIGNMENT);
         overlay.add(suc1);
-        overlay.add(Box.createVerticalStrut(8));
+        overlay.add(Box.createVerticalStrut(12));
 
-        String msg2 = liveInjected
-                ? "Agent injected into running Minecraft — check in-game chat!"
-                : mcWasRunning
-                    ? "Mod installed. Restart Minecraft for full features."
-                    : "Mod installed. Start Minecraft to load the client.";
-        JLabel suc2 = new JLabel(msg2);
-        suc2.setFont(new Font("SansSerif", Font.PLAIN, 14));
-        suc2.setForeground(liveInjected ? GREEN : TEXT_GRAY);
+        JLabel suc2 = new JLabel("<html><center><b>MINECRAFT'I KAPAT VE TEKRAR AC!</b></center></html>");
+        suc2.setFont(new Font("SansSerif", Font.BOLD, 16));
+        suc2.setForeground(RED);
         suc2.setAlignmentX(Component.CENTER_ALIGNMENT);
         overlay.add(suc2);
         overlay.add(Box.createVerticalStrut(6));
 
-        JLabel suc3 = new JLabel("Press RIGHT SHIFT in-game to open the menu.");
+        JLabel suc2b = new JLabel("Mod kopyalandi. Minecraft acildiginda otomatik yuklenecek.");
+        suc2b.setFont(new Font("SansSerif", Font.PLAIN, 12));
+        suc2b.setForeground(TEXT_GRAY);
+        suc2b.setAlignmentX(Component.CENTER_ALIGNMENT);
+        overlay.add(suc2b);
+        overlay.add(Box.createVerticalStrut(6));
+
+        JLabel suc3 = new JLabel("Oyunda RIGHT SHIFT ile menu acilir.");
         suc3.setFont(new Font("SansSerif", Font.PLAIN, 12));
         suc3.setForeground(TEXT_DIM);
         suc3.setAlignmentX(Component.CENTER_ALIGNMENT);
         overlay.add(suc3);
-        overlay.add(Box.createVerticalStrut(6));
-
-        JLabel suc4 = new JLabel("The mod self-destructs after loading — no traces left.");
-        suc4.setFont(new Font("SansSerif", Font.PLAIN, 11));
-        suc4.setForeground(TEXT_DIM);
-        suc4.setAlignmentX(Component.CENTER_ALIGNMENT);
-        overlay.add(suc4);
         overlay.add(Box.createVerticalStrut(4));
 
         // Show where mod was copied
@@ -1294,7 +1316,12 @@ public class LimpInjector {
         timer.start();
     }
 
-    // ── Detection — aggressively finds Modrinth/launcher profiles ──
+    // All discovered profiles for the combo box
+    private final List<String> profileNames = new ArrayList<>();
+    private final List<Path> profilePaths = new ArrayList<>();
+    private JComboBox<String> profileCombo;
+
+    // ── Detection — finds all Modrinth/launcher profiles ──
     private void detectMinecraft() {
         String os = System.getProperty("os.name", "").toLowerCase();
         String home = System.getProperty("user.home", "");
@@ -1303,173 +1330,131 @@ public class LimpInjector {
             String appdata = System.getenv("APPDATA");
             String localAppdata = System.getenv("LOCALAPPDATA");
 
-            // 1. MODRINTH — search aggressively for any profile with mods
-            Path modrinthFound = findModrinthProfile(appdata, localAppdata, home);
-            if (modrinthFound != null) return;
+            // 1. Scan ALL Modrinth profiles
+            collectModrinthProfiles(appdata, localAppdata, home);
 
-            // 2. Other launchers
+            // 2. Also check other launchers
             List<Path> launchers = new ArrayList<>();
             if (appdata != null) launchers.add(Paths.get(appdata, "PrismLauncher", "instances"));
-            launchers.add(Paths.get(home, "AppData", "Roaming", "PrismLauncher", "instances"));
             launchers.add(Paths.get(home, "curseforge", "minecraft", "Instances"));
-            launchers.add(Paths.get(home, "AppData", "Local", "MultiMC", "instances"));
             if (appdata != null) launchers.add(Paths.get(appdata, "ATLauncher", "instances"));
-            if (appdata != null) launchers.add(Paths.get(appdata, "gdlauncher_next", "instances"));
-            launchers.add(Paths.get(home, ".lunarclient", "offline", "multiver"));
 
             for (Path dir : launchers) {
-                if (findInstanceIn(dir)) return;
+                collectInstanceProfiles(dir);
             }
 
-            // 3. Standard .minecraft (LAST)
+            // 3. Standard .minecraft as last option
             if (appdata != null && Files.isDirectory(Paths.get(appdata, ".minecraft"))) {
-                detectedModsDir = Paths.get(appdata, ".minecraft", "mods");
-                detectedName = "Minecraft (.minecraft)";
-                updateStatusUI();
-                return;
+                profileNames.add(".minecraft (vanilla)");
+                profilePaths.add(Paths.get(appdata, ".minecraft", "mods"));
             }
         } else if (os.contains("mac")) {
             String lib = home + "/Library/Application Support";
-            if (findModrinthProfileAt(Paths.get(lib, "com.modrinth.theseus", "profiles"))) return;
+            collectProfilesFromDir(Paths.get(lib, "com.modrinth.theseus", "profiles"), "Modrinth");
+            collectProfilesFromDir(Paths.get(lib, "ModrinthApp", "profiles"), "Modrinth");
             if (Files.isDirectory(Paths.get(lib, "minecraft"))) {
-                detectedModsDir = Paths.get(lib, "minecraft", "mods");
-                detectedName = "Minecraft";
-                updateStatusUI();
-                return;
+                profileNames.add(".minecraft");
+                profilePaths.add(Paths.get(lib, "minecraft", "mods"));
             }
         } else {
-            if (findModrinthProfileAt(Paths.get(home, ".modrinth", "profiles"))) return;
-            if (findInstanceIn(Paths.get(home, ".local", "share", "PrismLauncher", "instances"))) return;
+            collectProfilesFromDir(Paths.get(home, ".modrinth", "profiles"), "Modrinth");
+            collectProfilesFromDir(Paths.get(home, ".config", "ModrinthApp", "profiles"), "Modrinth");
             if (Files.isDirectory(Paths.get(home, ".minecraft"))) {
-                detectedModsDir = Paths.get(home, ".minecraft", "mods");
-                detectedName = "Minecraft";
-                updateStatusUI();
-                return;
+                profileNames.add(".minecraft");
+                profilePaths.add(Paths.get(home, ".minecraft", "mods"));
             }
         }
 
-        // Absolute last resort
-        String appdata = System.getenv("APPDATA");
-        if (appdata != null) {
-            detectedModsDir = Paths.get(appdata, ".minecraft", "mods");
-            detectedName = "Minecraft (default)";
-            updateStatusUI();
-            return;
+        if (!profilePaths.isEmpty()) {
+            // Auto-select the best profile
+            int bestIdx = 0;
+            int bestScore = -1;
+            for (int i = 0; i < profileNames.size(); i++) {
+                String n = profileNames.get(i).toLowerCase();
+                int score = 0;
+                if (n.contains("1.21.11") || n.contains("1.21")) score += 500;
+                if (n.contains("c3rvette") || n.contains("modpack")) score += 300;
+                if (!n.contains(".minecraft")) score += 100;
+                if (score > bestScore) { bestScore = score; bestIdx = i; }
+            }
+            detectedModsDir = profilePaths.get(bestIdx);
+            detectedName = profileNames.get(bestIdx);
+        } else {
+            detectedName = "Minecraft not found";
         }
-        detectedName = "Minecraft not found";
         updateStatusUI();
     }
 
-    private Path findModrinthProfile(String appdata, String localAppdata, String home) {
-        // Try ALL possible Modrinth data locations — ModrinthApp FIRST (newer versions)
-        List<Path> modrinthRoots = new ArrayList<>();
-        if (appdata != null) {
-            modrinthRoots.add(Paths.get(appdata, "ModrinthApp"));
-            modrinthRoots.add(Paths.get(appdata, "modrinth"));
-            modrinthRoots.add(Paths.get(appdata, "com.modrinth.theseus"));
-        }
-        if (localAppdata != null) {
-            modrinthRoots.add(Paths.get(localAppdata, "ModrinthApp"));
-            modrinthRoots.add(Paths.get(localAppdata, "modrinth"));
-            modrinthRoots.add(Paths.get(localAppdata, "com.modrinth.theseus"));
-        }
-        modrinthRoots.add(Paths.get(home, "AppData", "Roaming", "ModrinthApp"));
-        modrinthRoots.add(Paths.get(home, "AppData", "Local", "ModrinthApp"));
-
-        for (Path root : modrinthRoots) {
+    private void collectModrinthProfiles(String appdata, String localAppdata, String home) {
+        // Try ALL possible Modrinth locations — ModrinthApp FIRST
+        String[][] roots = {
+            {appdata, "ModrinthApp"}, {appdata, "modrinth"},
+            {localAppdata, "ModrinthApp"}, {localAppdata, "modrinth"},
+            {home, "AppData", "Roaming", "ModrinthApp"},
+            {home, "AppData", "Local", "ModrinthApp"},
+            {appdata, "com.modrinth.theseus"},
+            {localAppdata, "com.modrinth.theseus"},
+        };
+        for (String[] parts : roots) {
+            if (parts[0] == null) continue;
             try {
-                if (!Files.isDirectory(root)) continue;
-                log("Modrinth root found: " + root);
-
+                Path root = Paths.get(parts[0], Arrays.copyOfRange(parts, 1, parts.length));
                 Path profilesDir = root.resolve("profiles");
-                if (findModrinthProfileAt(profilesDir)) {
-                    log("Profile found: " + detectedName + " -> " + detectedModsDir);
-                    return detectedModsDir;
-                }
-
-                if (findModrinthProfileAt(root)) {
-                    log("Profile found (root): " + detectedName + " -> " + detectedModsDir);
-                    return detectedModsDir;
+                if (Files.isDirectory(profilesDir)) {
+                    log("Modrinth found: " + profilesDir);
+                    collectProfilesFromDir(profilesDir, "Modrinth");
+                    if (!profileNames.isEmpty()) return;
                 }
             } catch (Exception e) {
-                log("Modrinth root error (" + root + "): " + e.getMessage());
+                log("Modrinth scan error: " + e.getMessage());
             }
         }
-        return null;
     }
 
-    private boolean findModrinthProfileAt(Path profilesDir) {
-        if (!Files.isDirectory(profilesDir)) return false;
+    private void collectProfilesFromDir(Path profilesDir, String source) {
+        if (!Files.isDirectory(profilesDir)) return;
         try (DirectoryStream<Path> stream = Files.newDirectoryStream(profilesDir)) {
-            Path bestProfile = null;
-            int bestScore = -1;
-
             for (Path profile : stream) {
                 if (!Files.isDirectory(profile)) continue;
-                String pName = profile.getFileName().toString().toLowerCase();
                 Path modsDir = profile.resolve("mods");
-
-                int modCount = 0;
-                if (Files.isDirectory(modsDir)) {
-                    try (DirectoryStream<Path> mods = Files.newDirectoryStream(modsDir, "*.jar")) {
-                        for (Path m : mods) modCount++;
-                    } catch (IOException ignored) {}
-                }
-
-                boolean hasMcFiles = modCount > 0
+                boolean valid = Files.isDirectory(modsDir)
                         || Files.exists(profile.resolve("options.txt"))
                         || Files.isDirectory(profile.resolve("config"));
-                if (!hasMcFiles) continue;
-
-                // Score: mod count + bonus for matching version + bonus for recent modification
-                int score = modCount;
-                if (pName.contains("1.21.11") || pName.contains("1.21")) score += 500;
-                try {
-                    long lastMod = Files.getLastModifiedTime(profile).toMillis();
-                    long ageHours = (System.currentTimeMillis() - lastMod) / (3600_000);
-                    if (ageHours < 24) score += 200;
-                    else if (ageHours < 168) score += 100;
-                } catch (IOException ignored) {}
-
-                log("  Profile: " + profile.getFileName() + " (" + modCount + " mods, score=" + score + ")");
-
-                if (score > bestScore) {
-                    bestScore = score;
-                    bestProfile = profile;
+                if (!valid) {
+                    // Even without mods/, any subdirectory under profiles/ is a valid profile
+                    // Modrinth creates the mods/ folder when needed
+                    valid = true;
+                }
+                if (valid) {
+                    String name = profile.getFileName().toString() + " (" + source + ")";
+                    // Avoid duplicates
+                    if (!profileNames.contains(name)) {
+                        profileNames.add(name);
+                        profilePaths.add(profile.resolve("mods"));
+                        log("  Profile: " + name);
+                    }
                 }
             }
-
-            if (bestProfile != null) {
-                detectedModsDir = bestProfile.resolve("mods");
-                detectedName = bestProfile.getFileName().toString() + " (Modrinth)";
-                updateStatusUI();
-                return true;
-            }
-        } catch (IOException ignored) {}
-        return false;
+        } catch (IOException e) {
+            log("Profile scan error: " + e.getMessage());
+        }
     }
 
-    private boolean findInstanceIn(Path dir) {
-        if (!Files.isDirectory(dir)) return false;
+    private void collectInstanceProfiles(Path dir) {
+        if (!Files.isDirectory(dir)) return;
         try (DirectoryStream<Path> stream = Files.newDirectoryStream(dir)) {
             for (Path inst : stream) {
                 if (!Files.isDirectory(inst)) continue;
-                Path instMc = inst.resolve(".minecraft");
-                if (Files.isDirectory(instMc)) {
-                    detectedModsDir = instMc.resolve("mods");
-                    detectedName = inst.getFileName().toString();
-                    updateStatusUI();
-                    return true;
-                }
-                if (Files.isDirectory(inst.resolve("mods")) || Files.exists(inst.resolve("options.txt"))) {
-                    detectedModsDir = inst.resolve("mods");
-                    detectedName = inst.getFileName().toString();
-                    updateStatusUI();
-                    return true;
+                Path mc = inst.resolve(".minecraft");
+                if (Files.isDirectory(mc)) {
+                    profileNames.add(inst.getFileName().toString());
+                    profilePaths.add(mc.resolve("mods"));
+                } else if (Files.isDirectory(inst.resolve("mods"))) {
+                    profileNames.add(inst.getFileName().toString());
+                    profilePaths.add(inst.resolve("mods"));
                 }
             }
         } catch (IOException ignored) {}
-        return false;
     }
 
     private void updateStatusUI() {
