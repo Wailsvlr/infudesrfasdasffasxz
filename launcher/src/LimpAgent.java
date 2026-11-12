@@ -10,12 +10,32 @@ public class LimpAgent {
 
     private static final String MOD_JAR = "legitclient-1.0.0.jar";
     private static Instrumentation savedInst;
+    private static StringBuilder logBuffer = new StringBuilder();
+    private static String logFilePath;
+
+    private static void log(String msg) {
+        System.out.println("[LIMP-AGENT] " + msg);
+        logBuffer.append(msg).append("\n");
+        writeLogFile();
+    }
+
+    private static void writeLogFile() {
+        if (logFilePath == null) {
+            String tmp = System.getenv("TEMP");
+            if (tmp == null) tmp = System.getenv("TMP");
+            if (tmp == null) tmp = System.getProperty("java.io.tmpdir");
+            logFilePath = tmp + File.separator + "limp_agent_log.txt";
+        }
+        try {
+            Files.write(Paths.get(logFilePath), logBuffer.toString().getBytes("UTF-8"));
+        } catch (Exception ignored) {}
+    }
 
     public static void agentmain(String args, Instrumentation inst) {
         savedInst = inst;
-        System.out.println("[LIMP] ========================================");
-        System.out.println("[LIMP] Agent loaded into running JVM!");
-        System.out.println("[LIMP] Args: " + args);
+        log("========================================");
+        log("Agent loaded into running JVM!");
+        log("Args: " + args);
 
         try {
             String modsDir = null;
@@ -32,23 +52,23 @@ public class LimpAgent {
                     Path mods = Paths.get(modsDir);
                     Files.createDirectories(mods);
                     Files.copy(Paths.get(modJarPath), mods.resolve(MOD_JAR), StandardCopyOption.REPLACE_EXISTING);
-                    System.out.println("[LIMP] Mod copied to " + mods);
+                    log("Mod copied to " + mods);
                 } catch (Exception e) {
-                    System.err.println("[LIMP] Mod copy failed: " + e);
+                    log("Mod copy failed: " + e);
                 }
             }
 
             // Find Minecraft's classloader
             ClassLoader mcLoader = findMinecraftClassLoader();
             if (mcLoader == null) {
-                System.err.println("[LIMP] Could not find Minecraft classloader!");
-                System.err.println("[LIMP] Listing all threads for debug:");
+                log("Could not find Minecraft classloader!");
+                log("Listing all threads for debug:");
                 Thread[] threads = new Thread[Thread.activeCount() + 50];
                 int count = Thread.enumerate(threads);
                 for (int i = 0; i < count; i++) {
                     if (threads[i] != null) {
                         ClassLoader cl = threads[i].getContextClassLoader();
-                        System.err.println("[LIMP]   Thread: " + threads[i].getName()
+                        log("  Thread: " + threads[i].getName()
                             + " | CL: " + (cl == null ? "null" : cl.getClass().getName()));
                     }
                 }
@@ -64,11 +84,11 @@ public class LimpAgent {
             // Step 3: Install render hook via class retransformation
             installRenderHook(mcLoader, inst);
 
-            System.out.println("[LIMP] ========================================");
-            System.out.println("[LIMP] Injection complete!");
+            log("========================================");
+            log("Injection complete!");
 
         } catch (Exception e) {
-            System.err.println("[LIMP] Agent error: " + e);
+            log("Agent error: " + e);
             e.printStackTrace();
         }
     }
@@ -76,7 +96,7 @@ public class LimpAgent {
     // ── Change Minecraft Window Title via GLFW ──
     private static void changeWindowTitle(ClassLoader mcLoader) {
         try {
-            System.out.println("[LIMP] Changing window title...");
+            log("Changing window title...");
 
             // Load GLFW class from Minecraft's classloader
             Class<?> glfwClass = mcLoader.loadClass("org.lwjgl.glfw.GLFW");
@@ -85,30 +105,30 @@ public class LimpAgent {
             // Find Minecraft instance
             Object mc = findMinecraftInstance(mcLoader);
             if (mc == null) {
-                System.err.println("[LIMP] Could not find Minecraft instance for title change");
+                log("Could not find Minecraft instance for title change");
                 return;
             }
 
             // Find Window object (has a long 'handle' field)
             long windowHandle = findWindowHandle(mc);
             if (windowHandle == 0) {
-                System.err.println("[LIMP] Could not find GLFW window handle");
+                log("Could not find GLFW window handle");
                 return;
             }
 
             // Change the title!
             setTitle.invoke(null, windowHandle, "Minecraft - LIMP Client Injected!");
-            System.out.println("[LIMP] Window title changed!");
+            log("Window title changed!");
 
         } catch (Exception e) {
-            System.err.println("[LIMP] Title change failed: " + e);
+            log("Title change failed: " + e);
         }
     }
 
     // ── Send Chat Message ──
     private static void sendChatMessage(ClassLoader loader) {
         try {
-            System.out.println("[LIMP] Sending chat message...");
+            log("Sending chat message...");
 
             Object mc = findMinecraftInstance(loader);
             if (mc == null) return;
@@ -119,7 +139,7 @@ public class LimpAgent {
                     try {
                         doSendChat(mc, loader);
                     } catch (Exception e) {
-                        System.err.println("[LIMP] Chat send error: " + e);
+                        log("Chat send error: " + e);
                     }
                 }
             };
@@ -131,7 +151,7 @@ public class LimpAgent {
                         && m.getParameterTypes()[0] == Runnable.class) {
                     m.invoke(mc, task);
                     scheduled = true;
-                    System.out.println("[LIMP] Chat task scheduled on MC thread");
+                    log("Chat task scheduled on MC thread");
                     break;
                 }
             }
@@ -147,12 +167,12 @@ public class LimpAgent {
                 }
             }
             if (!scheduled) {
-                System.err.println("[LIMP] Could not schedule on MC thread, running directly");
+                log("Could not schedule on MC thread, running directly");
                 task.run();
             }
 
         } catch (Exception e) {
-            System.err.println("[LIMP] Chat message failed: " + e);
+            log("Chat message failed: " + e);
         }
     }
 
@@ -164,15 +184,15 @@ public class LimpAgent {
             gui = findFieldByTypeName(mc, "Gui", "Hud", "InGame");
         }
         if (gui == null) {
-            System.err.println("[LIMP] Could not find GUI/HUD object");
-            System.err.println("[LIMP] MC class: " + mc.getClass().getName());
-            System.err.println("[LIMP] Fields:");
+            log("Could not find GUI/HUD object");
+            log("MC class: " + mc.getClass().getName());
+            log("Fields:");
             for (Field f : mc.getClass().getDeclaredFields()) {
-                System.err.println("[LIMP]   " + f.getName() + " : " + f.getType().getName());
+                log("  " + f.getName() + " : " + f.getType().getName());
             }
             return;
         }
-        System.out.println("[LIMP] Found GUI: " + gui.getClass().getName());
+        log("Found GUI: " + gui.getClass().getName());
 
         // Find chat component
         Object chat = findFieldByNames(gui, "chat", "field_2013", "f_93823_", "chatHud");
@@ -192,16 +212,16 @@ public class LimpAgent {
             }
         }
         if (chat == null) {
-            System.err.println("[LIMP] Could not find chat component");
+            log("Could not find chat component");
             return;
         }
-        System.out.println("[LIMP] Found chat: " + chat.getClass().getName());
+        log("Found chat: " + chat.getClass().getName());
 
         // Create text component via Component.literal() or Text.literal()
         Object message = createTextComponent(loader,
             "§d§l[LIMP Client]§r §aInjected! Press RIGHT SHIFT for menu.");
         if (message == null) {
-            System.err.println("[LIMP] Could not create text component");
+            log("Could not create text component");
             return;
         }
 
@@ -212,10 +232,10 @@ public class LimpAgent {
                 try {
                     m.invoke(chat, message);
                     sent = true;
-                    System.out.println("[LIMP] Chat message sent!");
+                    log("Chat message sent!");
                     break;
                 } catch (Exception e) {
-                    System.err.println("[LIMP] addMessage failed: " + e);
+                    log("addMessage failed: " + e);
                 }
             }
         }
@@ -225,7 +245,7 @@ public class LimpAgent {
                 if (m.getParameterCount() == 1 && m.getParameterTypes()[0].isInstance(message)) {
                     try {
                         m.invoke(chat, message);
-                        System.out.println("[LIMP] Message sent via " + m.getName());
+                        log("Message sent via " + m.getName());
                         sent = true;
                         break;
                     } catch (Exception ignored) {}
@@ -265,16 +285,16 @@ public class LimpAgent {
         // This is a placeholder — in a full implementation, we'd use ASM
         // to modify the render method and draw our own overlay.
         // For now, we just log that we could do it.
-        System.out.println("[LIMP] Instrumentation available: " + (inst != null));
+        log("Instrumentation available: " + (inst != null));
         if (inst != null) {
-            System.out.println("[LIMP] Can retransform: " + inst.isRetransformClassesSupported());
-            System.out.println("[LIMP] Can redefine: " + inst.isRedefineClassesSupported());
+            log("Can retransform: " + inst.isRetransformClassesSupported());
+            log("Can redefine: " + inst.isRedefineClassesSupported());
             Class<?>[] loaded = inst.getAllLoadedClasses();
             int mcClasses = 0;
             for (Class<?> c : loaded) {
                 if (c.getName().startsWith("net.minecraft.")) mcClasses++;
             }
-            System.out.println("[LIMP] Loaded MC classes: " + mcClasses + " / " + loaded.length + " total");
+            log("Loaded MC classes: " + mcClasses + " / " + loaded.length + " total");
         }
     }
 
@@ -291,7 +311,7 @@ public class LimpAgent {
                 Class<?> mcClass = loader.loadClass(cn);
                 Object mc = getStaticSelf(mcClass);
                 if (mc != null) {
-                    System.out.println("[LIMP] Found MC instance via " + cn);
+                    log("Found MC instance via " + cn);
                     return mc;
                 }
             } catch (ClassNotFoundException ignored) {}
@@ -308,7 +328,7 @@ public class LimpAgent {
                         for (Field f : c.getDeclaredFields()) {
                             String ft = f.getType().getName().toLowerCase();
                             if (ft.contains("window") || ft.contains("glfw")) {
-                                System.out.println("[LIMP] Found MC instance via brute force: " + c.getName());
+                                log("Found MC instance via brute force: " + c.getName());
                                 return instance;
                             }
                         }
@@ -317,7 +337,7 @@ public class LimpAgent {
             }
         }
 
-        System.err.println("[LIMP] Could not find Minecraft instance");
+        log("Could not find Minecraft instance");
         return null;
     }
 
@@ -356,7 +376,7 @@ public class LimpAgent {
                             long handle = wf.getLong(val);
                             // GLFW handles are always positive and large
                             if (handle > 0) {
-                                System.out.println("[LIMP] Found window handle via " + f.getName()
+                                log("Found window handle via " + f.getName()
                                     + "." + wf.getName() + " = " + handle);
                                 return handle;
                             }
@@ -435,7 +455,7 @@ public class LimpAgent {
             if (name.contains("render") || name.contains("main") || name.contains("client")) {
                 ClassLoader cl = t.getContextClassLoader();
                 if (cl != null && canLoadMinecraft(cl)) {
-                    System.out.println("[LIMP] Found MC classloader on thread: " + t.getName());
+                    log("Found MC classloader on thread: " + t.getName());
                     return cl;
                 }
             }
@@ -446,7 +466,7 @@ public class LimpAgent {
             if (threads[i] == null) continue;
             ClassLoader cl = threads[i].getContextClassLoader();
             if (cl != null && canLoadMinecraft(cl)) {
-                System.out.println("[LIMP] Found MC classloader on thread: " + threads[i].getName());
+                log("Found MC classloader on thread: " + threads[i].getName());
                 return cl;
             }
         }

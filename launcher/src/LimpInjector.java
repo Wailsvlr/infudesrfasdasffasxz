@@ -49,6 +49,26 @@ public class LimpInjector {
     private final List<String> injectionLog = new ArrayList<>();
     private void log(String msg) { injectionLog.add(msg); System.out.println("[LIMP] " + msg); }
 
+    private void readAgentLog() {
+        try {
+            String tmp = System.getenv("TEMP");
+            if (tmp == null) tmp = System.getenv("TMP");
+            if (tmp == null) tmp = System.getProperty("java.io.tmpdir");
+            Path logFile = Paths.get(tmp, "limp_agent_log.txt");
+            if (Files.exists(logFile)) {
+                log("--- Agent Log ---");
+                for (String line : Files.readAllLines(logFile)) {
+                    log("  " + line);
+                }
+                Files.delete(logFile);
+            } else {
+                log("Agent log file not found at " + logFile);
+            }
+        } catch (Exception e) {
+            log("Could not read agent log: " + e.getMessage());
+        }
+    }
+
     public static void main(String[] args) {
         try {
             SwingUtilities.invokeAndWait(new Runnable() {
@@ -665,6 +685,9 @@ public class LimpInjector {
                         liveInjected = tryAttachInject(mcPid, modSource.toAbsolutePath().toString());
                         if (liveInjected) {
                             log("LIVE INJECTION SUCCESSFUL!");
+                            // Wait for agent to write its log, then read it
+                            try { Thread.sleep(3000); } catch (InterruptedException ignored) {}
+                            readAgentLog();
                         } else {
                             log("Attach API injection failed (see above)");
                         }
@@ -1198,26 +1221,39 @@ public class LimpInjector {
         overlay.add(check);
         overlay.add(Box.createVerticalStrut(24));
 
-        String titleText = "LIMP Client Installed!";
+        String titleText = liveInjected ? "LIMP Client Injected!" : "LIMP Client Installed!";
         JLabel suc1 = new JLabel(titleText);
         suc1.setFont(new Font("SansSerif", Font.BOLD, 24));
-        suc1.setForeground(TEXT_WHITE);
+        suc1.setForeground(liveInjected ? GREEN : TEXT_WHITE);
         suc1.setAlignmentX(Component.CENTER_ALIGNMENT);
         overlay.add(suc1);
         overlay.add(Box.createVerticalStrut(12));
 
-        JLabel suc2 = new JLabel("<html><center><b>MINECRAFT'I KAPAT VE TEKRAR AC!</b></center></html>");
-        suc2.setFont(new Font("SansSerif", Font.BOLD, 16));
-        suc2.setForeground(RED);
-        suc2.setAlignmentX(Component.CENTER_ALIGNMENT);
-        overlay.add(suc2);
-        overlay.add(Box.createVerticalStrut(6));
-
-        JLabel suc2b = new JLabel("Mod kopyalandi. Minecraft acildiginda otomatik yuklenecek.");
-        suc2b.setFont(new Font("SansSerif", Font.PLAIN, 12));
-        suc2b.setForeground(TEXT_GRAY);
-        suc2b.setAlignmentX(Component.CENTER_ALIGNMENT);
-        overlay.add(suc2b);
+        if (liveInjected) {
+            JLabel suc2 = new JLabel("Agent Minecraft'a yuklendi! Oyuna bak.");
+            suc2.setFont(new Font("SansSerif", Font.BOLD, 14));
+            suc2.setForeground(GREEN);
+            suc2.setAlignmentX(Component.CENTER_ALIGNMENT);
+            overlay.add(suc2);
+            overlay.add(Box.createVerticalStrut(4));
+            JLabel suc2b = new JLabel("Pencere basligini ve chat'i kontrol et.");
+            suc2b.setFont(new Font("SansSerif", Font.PLAIN, 12));
+            suc2b.setForeground(TEXT_GRAY);
+            suc2b.setAlignmentX(Component.CENTER_ALIGNMENT);
+            overlay.add(suc2b);
+        } else {
+            JLabel suc2 = new JLabel("<html><center><b>MINECRAFT'I KAPAT VE TEKRAR AC!</b></center></html>");
+            suc2.setFont(new Font("SansSerif", Font.BOLD, 16));
+            suc2.setForeground(RED);
+            suc2.setAlignmentX(Component.CENTER_ALIGNMENT);
+            overlay.add(suc2);
+            overlay.add(Box.createVerticalStrut(4));
+            JLabel suc2b = new JLabel("Mod kopyalandi. Minecraft acildiginda otomatik yuklenecek.");
+            suc2b.setFont(new Font("SansSerif", Font.PLAIN, 12));
+            suc2b.setForeground(TEXT_GRAY);
+            suc2b.setAlignmentX(Component.CENTER_ALIGNMENT);
+            overlay.add(suc2b);
+        }
         overlay.add(Box.createVerticalStrut(6));
 
         JLabel suc3 = new JLabel("Oyunda RIGHT SHIFT ile menu acilir.");
