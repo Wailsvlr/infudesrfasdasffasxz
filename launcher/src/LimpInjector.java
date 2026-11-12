@@ -732,20 +732,35 @@ public class LimpInjector {
         String os = System.getProperty("os.name", "").toLowerCase();
 
         if (os.contains("win")) {
-            searchPaths.add(Paths.get("C:\\Program Files\\Java"));
-            searchPaths.add(Paths.get("C:\\Program Files\\Eclipse Adoptium"));
-            searchPaths.add(Paths.get(System.getProperty("user.home"), ".jdks"));
-            String localApp = System.getenv("LOCALAPPDATA");
-            if (localApp != null) {
-                searchPaths.add(Paths.get(localApp, "Programs", "Eclipse Adoptium"));
-            }
+            // Minecraft's bundled Java (HIGHEST PRIORITY — always has attach API)
             String appdata = System.getenv("APPDATA");
+            if (appdata != null) {
+                searchPaths.add(Paths.get(appdata, ".minecraft", "runtime", "java-runtime-delta"));
+                searchPaths.add(Paths.get(appdata, ".minecraft", "runtime", "java-runtime-gamma"));
+                searchPaths.add(Paths.get(appdata, ".minecraft", "runtime", "java-runtime-beta"));
+                searchPaths.add(Paths.get(appdata, ".minecraft", "runtime", "java-runtime-alpha"));
+            }
+            // Modrinth's bundled Java
             if (appdata != null) {
                 searchPaths.add(Paths.get(appdata, "com.modrinth.theseus", "meta", "java_versions"));
             }
-            // Minecraft's bundled Java runtime
-            if (appdata != null) {
-                searchPaths.add(Paths.get(appdata, ".minecraft", "runtime"));
+            String localApp = System.getenv("LOCALAPPDATA");
+            // Modrinth alternate location
+            if (localApp != null) {
+                searchPaths.add(Paths.get(localApp, "com.modrinth.theseus", "meta", "java_versions"));
+            }
+            // Standard JDK locations
+            searchPaths.add(Paths.get("C:\\Program Files\\Java"));
+            searchPaths.add(Paths.get("C:\\Program Files\\Eclipse Adoptium"));
+            searchPaths.add(Paths.get("C:\\Program Files (x86)\\Java"));
+            searchPaths.add(Paths.get(System.getProperty("user.home"), ".jdks"));
+            if (localApp != null) {
+                searchPaths.add(Paths.get(localApp, "Programs", "Eclipse Adoptium"));
+            }
+            // JAVA_HOME
+            String javaHome = System.getenv("JAVA_HOME");
+            if (javaHome != null) {
+                searchPaths.add(Paths.get(javaHome));
             }
         } else {
             searchPaths.add(Paths.get("/usr/lib/jvm"));
