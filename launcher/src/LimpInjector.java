@@ -45,6 +45,10 @@ public class LimpInjector {
     private JLabel mcStatusLabel;
     private JLabel mcPathLabel;
 
+    // Injection status log
+    private final List<String> injectionLog = new ArrayList<>();
+    private void log(String msg) { injectionLog.add(msg); System.out.println("[LIMP] " + msg); }
+
     public static void main(String[] args) {
         try {
             SwingUtilities.invokeAndWait(new Runnable() {
@@ -577,6 +581,9 @@ public class LimpInjector {
         new Thread(new Runnable() {
             public void run() {
                 try {
+                    injectionLog.clear();
+                    log("Starting injection...");
+
                     Path modSource = findModJar();
                     if (modSource == null) {
                         SwingUtilities.invokeLater(new Runnable() {
@@ -590,19 +597,30 @@ public class LimpInjector {
                         });
                         return;
                     }
+                    log("Mod JAR found: " + modSource);
 
                     // Copy mod to mods folder for next restart
                     Files.createDirectories(detectedModsDir);
                     Path dest = detectedModsDir.resolve(MOD_JAR);
                     Files.copy(modSource, dest, StandardCopyOption.REPLACE_EXISTING);
+                    log("Mod copied to: " + detectedModsDir);
 
                     // Find running Minecraft JVM and inject via Attach API
+                    log("Searching for Minecraft process...");
                     String mcPid = findMinecraftPid();
                     final boolean liveInjected;
 
                     if (mcPid != null) {
+                        log("Minecraft found! PID: " + mcPid);
+                        log("Attempting Attach API injection...");
                         liveInjected = tryAttachInject(mcPid, modSource.toAbsolutePath().toString());
+                        if (liveInjected) {
+                            log("LIVE INJECTION SUCCESSFUL!");
+                        } else {
+                            log("Attach API injection failed (see above)");
+                        }
                     } else {
+                        log("Minecraft process NOT FOUND (is it running?)");
                         liveInjected = false;
                     }
 
@@ -710,24 +728,29 @@ public class LimpInjector {
     }
 
     private boolean tryDirectAttach(String pid, String agentJar, String agentArgs) {
+        log("  Try 1: Direct Attach API...");
         try {
             Class<?> vmClass = Class.forName("com.sun.tools.attach.VirtualMachine");
+            log("  VirtualMachine class found!");
             Object vm = vmClass.getMethod("attach", String.class).invoke(null, pid);
             try {
                 vmClass.getMethod("loadAgent", String.class, String.class).invoke(vm, agentJar, agentArgs);
+                log("  Direct attach: SUCCESS!");
                 return true;
             } finally {
                 vmClass.getMethod("detach").invoke(vm);
             }
         } catch (ClassNotFoundException e) {
+            log("  Direct attach: VirtualMachine class not available (JRE, not JDK)");
             return false;
         } catch (Exception e) {
-            System.err.println("[LIMP] Direct attach failed: " + e);
+            log("  Direct attach FAILED: " + e.getMessage());
             return false;
         }
     }
 
     private boolean tryJdkAttach(String pid, String agentJar, String agentArgs) {
+        log("  Try 2: Searching for JDK on system...");
         List<Path> searchPaths = new ArrayList<>();
         String os = System.getProperty("os.name", "").toLowerCase();
 
@@ -796,6 +819,7 @@ public class LimpInjector {
 
     private boolean tryExternalAttach(String javaExe, String pid, String agentJar, String agentArgs) {
         try {
+            log("    Trying Java: " + javaExe);
             Path tmpDir = Files.createTempDirectory("limp-attach-");
             Path srcFile = tmpDir.resolve("LimpAttach.java");
             String code = "import com.sun.tools.attach.VirtualMachine;\n"
@@ -815,18 +839,47 @@ public class LimpInjector {
             Process compile = Runtime.getRuntime().exec(new String[]{javacExe, srcFile.toString()});
             boolean compiled = compile.waitFor(10, java.util.concurrent.TimeUnit.SECONDS);
             if (!compiled || compile.exitValue() != 0) {
+                log("    javac not found or compile failed");
+                // Try jcmd from this Java's bin directory
+                Path binDir = Paths.get(javaExe).getParent();
+                if (binDir != null) {
+                    String os = System.getProperty("os.name", "").toLowerCase();
+                    Path jcmdPath = binDir.resolve(os.contains("win") ? "jcmd.exe" : "jcmd");
+                    if (Files.exists(jcmdPath)) {
+                        log("    Found jcmd at: " + jcmdPath);
+                        Process jcmdProc = Runtime.getRuntime().exec(new String[]{
+                            jcmdPath.toString(), pid, "JVMTI.agent_load", agentJar, agentArgs
+                        });
+                        boolean jcmdDone = jcmdProc.waitFor(10, java.util.concurrent.TimeUnit.SECONDS);
+                        if (jcmdDone && jcmdProc.exitValue() == 0) {
+                            log("    jcmd agent_load: SUCCESS!");
+                            deleteDir(tmpDir);
+                            return true;
+                        }
+                        log("    jcmd failed (exit=" + (jcmdDone ? jcmdProc.exitValue() : "timeout") + ")");
+                    }
+                }
                 deleteDir(tmpDir);
                 return false;
             }
 
+            log("    Compiled attach helper, running...");
             Process run = Runtime.getRuntime().exec(new String[]{
                 javaExe, "-cp", tmpDir.toString(), "LimpAttach", pid, agentJar, agentArgs
             });
             boolean finished = run.waitFor(15, java.util.concurrent.TimeUnit.SECONDS);
             int exit = finished ? run.exitValue() : -1;
+            if (finished && exit == 0) {
+                log("    External attach: SUCCESS!");
+            } else {
+                BufferedReader err = new BufferedReader(new InputStreamReader(run.getErrorStream()));
+                String errLine = err.readLine();
+                log("    External attach FAILED (exit=" + exit + ")" + (errLine != null ? ": " + errLine : ""));
+            }
             deleteDir(tmpDir);
             return finished && exit == 0;
         } catch (Exception e) {
+            log("    External attach error: " + e.getMessage());
             return false;
         }
     }
@@ -841,11 +894,16 @@ public class LimpInjector {
         }
         for (String jcmd : jcmdPaths) {
             try {
+                log("    Trying: " + jcmd);
                 Process p = Runtime.getRuntime().exec(new String[]{jcmd, pid, "JVMTI.agent_load", agentJar});
                 boolean finished = p.waitFor(10, java.util.concurrent.TimeUnit.SECONDS);
-                if (finished && p.exitValue() == 0) return true;
+                if (finished && p.exitValue() == 0) {
+                    log("    jcmd: SUCCESS!");
+                    return true;
+                }
             } catch (Exception ignored) {}
         }
+        log("  Try 3: jcmd not available");
         return false;
     }
 
@@ -934,7 +992,27 @@ public class LimpInjector {
         suc4.setForeground(TEXT_DIM);
         suc4.setAlignmentX(Component.CENTER_ALIGNMENT);
         overlay.add(suc4);
-        overlay.add(Box.createVerticalStrut(30));
+        overlay.add(Box.createVerticalStrut(14));
+
+        // Show injection log
+        if (!injectionLog.isEmpty()) {
+            JTextArea logArea = new JTextArea();
+            logArea.setEditable(false);
+            logArea.setFont(new Font("Monospaced", Font.PLAIN, 10));
+            logArea.setBackground(new Color(10, 8, 18));
+            logArea.setForeground(TEXT_DIM);
+            logArea.setBorder(new EmptyBorder(8, 8, 8, 8));
+            StringBuilder sb = new StringBuilder();
+            for (String line : injectionLog) sb.append(line).append("\n");
+            logArea.setText(sb.toString());
+            JScrollPane scroll = new JScrollPane(logArea);
+            scroll.setPreferredSize(new Dimension(500, 100));
+            scroll.setMaximumSize(new Dimension(500, 100));
+            scroll.setBorder(BorderFactory.createLineBorder(BORDER, 1));
+            scroll.setAlignmentX(Component.CENTER_ALIGNMENT);
+            overlay.add(scroll);
+        }
+        overlay.add(Box.createVerticalStrut(14));
 
         // Close button
         JButton close = new JButton("Close Launcher") {
