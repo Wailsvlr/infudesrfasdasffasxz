@@ -992,7 +992,17 @@ public class LimpInjector {
         suc4.setForeground(TEXT_DIM);
         suc4.setAlignmentX(Component.CENTER_ALIGNMENT);
         overlay.add(suc4);
-        overlay.add(Box.createVerticalStrut(14));
+        overlay.add(Box.createVerticalStrut(4));
+
+        // Show where mod was copied
+        if (detectedModsDir != null) {
+            JLabel pathLabel = new JLabel("Mods: " + detectedModsDir.toAbsolutePath().toString());
+            pathLabel.setFont(new Font("Monospaced", Font.PLAIN, 9));
+            pathLabel.setForeground(TEXT_DIM);
+            pathLabel.setAlignmentX(Component.CENTER_ALIGNMENT);
+            overlay.add(pathLabel);
+        }
+        overlay.add(Box.createVerticalStrut(10));
 
         // Show injection log
         if (!injectionLog.isEmpty()) {
@@ -1081,28 +1091,22 @@ public class LimpInjector {
         List<Path> candidates = new ArrayList<>();
 
         if (os.contains("win")) {
-            // Standard .minecraft via APPDATA
             String appdata = System.getenv("APPDATA");
-            if (appdata != null) {
-                candidates.add(Paths.get(appdata, ".minecraft"));
-            }
-            // Fallback if APPDATA is null
-            candidates.add(Paths.get(home, "AppData", "Roaming", ".minecraft"));
 
-            // Modrinth App
+            // MODRINTH FIRST — user plays via Modrinth, its profiles must come before .minecraft
             if (appdata != null) {
                 candidates.add(Paths.get(appdata, "com.modrinth.theseus", "profiles"));
             }
             candidates.add(Paths.get(home, "AppData", "Roaming", "com.modrinth.theseus", "profiles"));
-
-            // CurseForge
-            candidates.add(Paths.get(home, "curseforge", "minecraft", "Instances"));
 
             // PrismLauncher
             if (appdata != null) {
                 candidates.add(Paths.get(appdata, "PrismLauncher", "instances"));
             }
             candidates.add(Paths.get(home, "AppData", "Roaming", "PrismLauncher", "instances"));
+
+            // CurseForge
+            candidates.add(Paths.get(home, "curseforge", "minecraft", "Instances"));
 
             // MultiMC
             candidates.add(Paths.get(home, "AppData", "Local", "MultiMC", "instances"));
@@ -1119,6 +1123,12 @@ public class LimpInjector {
 
             // Feather / Lunar
             candidates.add(Paths.get(home, ".lunarclient", "offline", "multiver"));
+
+            // Standard .minecraft LAST (fallback — most modded players use a launcher above)
+            if (appdata != null) {
+                candidates.add(Paths.get(appdata, ".minecraft"));
+            }
+            candidates.add(Paths.get(home, "AppData", "Roaming", ".minecraft"));
         } else if (os.contains("mac")) {
             candidates.add(Paths.get(home, "Library", "Application Support", "minecraft"));
             candidates.add(Paths.get(home, "Library", "Application Support", "com.modrinth.theseus", "profiles"));
