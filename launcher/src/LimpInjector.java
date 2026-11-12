@@ -556,12 +556,12 @@ public class LimpInjector {
         return panel;
     }
 
-    // ── Quick inject (Prestige-style: auto-detect → inject → close) ──
+    // ── Inject via Java Attach API (like Vape V4 / Prestige Client) ──
+    // Game stays running. Agent loads into the running JVM.
     private void doQuickInject(JButton btn) {
         if (detectedModsDir == null) {
-            // Not auto-detected, let user browse
             JFileChooser chooser = new JFileChooser();
-            chooser.setDialogTitle("Select your .minecraft folder");
+            chooser.setDialogTitle("Select your .minecraft or Modrinth profile folder");
             chooser.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
             if (chooser.showOpenDialog(frame) == JFileChooser.APPROVE_OPTION) {
                 Path mc = chooser.getSelectedFile().toPath();
@@ -577,7 +577,6 @@ public class LimpInjector {
         new Thread(new Runnable() {
             public void run() {
                 try {
-                    Files.createDirectories(detectedModsDir);
                     Path modSource = findModJar();
                     if (modSource == null) {
                         SwingUtilities.invokeLater(new Runnable() {
@@ -592,16 +591,27 @@ public class LimpInjector {
                         return;
                     }
 
+                    // Copy mod to mods folder for next restart
+                    Files.createDirectories(detectedModsDir);
                     Path dest = detectedModsDir.resolve(MOD_JAR);
                     Files.copy(modSource, dest, StandardCopyOption.REPLACE_EXISTING);
 
+                    // Find running Minecraft JVM and inject via Attach API
+                    String mcPid = findMinecraftPid();
+                    final boolean liveInjected;
+
+                    if (mcPid != null) {
+                        liveInjected = tryAttachInject(mcPid, modSource.toAbsolutePath().toString());
+                    } else {
+                        liveInjected = false;
+                    }
+
+                    final boolean mcWasRunning = (mcPid != null);
                     SwingUtilities.invokeLater(new Runnable() {
                         public void run() {
-                            btn.setText("Injected!");
+                            btn.setText(liveInjected ? "Injected!" : "Installed!");
                             btn.setForeground(GREEN);
-
-                            // Show success overlay
-                            showSuccessOverlay();
+                            showSuccessOverlay(mcWasRunning, liveInjected);
                         }
                     });
 
@@ -619,18 +629,239 @@ public class LimpInjector {
         }).start();
     }
 
-    private void showSuccessOverlay() {
-        // Replace content with a success screen
+    // ── Find Minecraft's JVM PID ──
+    private String findMinecraftPid() {
+        String os = System.getProperty("os.name", "").toLowerCase();
+        if (os.contains("win")) return findMinecraftPidWindows();
+        return findMinecraftPidUnix();
+    }
+
+    private String findMinecraftPidWindows() {
+        try {
+            Process p = Runtime.getRuntime().exec(new String[]{
+                "cmd", "/c", "wmic process where \"name='javaw.exe' or name='java.exe'\" get ProcessId,CommandLine /FORMAT:CSV"
+            });
+            BufferedReader reader = new BufferedReader(new InputStreamReader(p.getInputStream()));
+            String line;
+            String selfPid = "";
+            try {
+                selfPid = java.lang.management.ManagementFactory.getRuntimeMXBean().getName().split("@")[0];
+            } catch (Exception ignored) {}
+
+            while ((line = reader.readLine()) != null) {
+                String lower = line.toLowerCase();
+                if ((lower.contains("net.minecraft") || lower.contains("--gamedir") || lower.contains("lwjgl"))
+                        && !lower.contains("limpinjector")) {
+                    String[] parts = line.split(",");
+                    if (parts.length >= 2) {
+                        String pid = parts[parts.length - 1].trim();
+                        if (!pid.isEmpty() && !pid.equals(selfPid) && pid.matches("\\d+")) {
+                            reader.close();
+                            p.waitFor();
+                            return pid;
+                        }
+                    }
+                }
+            }
+            reader.close();
+            p.waitFor();
+        } catch (Exception ignored) {}
+        return null;
+    }
+
+    private String findMinecraftPidUnix() {
+        try {
+            Process p = Runtime.getRuntime().exec(new String[]{
+                "sh", "-c", "ps aux | grep -i minecraft | grep java | grep -v grep | head -1"
+            });
+            BufferedReader reader = new BufferedReader(new InputStreamReader(p.getInputStream()));
+            String line = reader.readLine();
+            reader.close();
+            if (line != null) {
+                String[] parts = line.trim().split("\\s+");
+                if (parts.length >= 2) return parts[1];
+            }
+        } catch (Exception ignored) {}
+        return null;
+    }
+
+    // ── Java Attach API injection (DLL-style, game stays running) ──
+    private boolean tryAttachInject(String pid, String modSourcePath) {
+        String agentJar = null;
+        try {
+            agentJar = new java.io.File(
+                LimpInjector.class.getProtectionDomain().getCodeSource().getLocation().toURI()
+            ).getAbsolutePath();
+        } catch (Exception e) {
+            return false;
+        }
+        String agentArgs = detectedModsDir.toAbsolutePath().toString() + "|" + modSourcePath;
+
+        // Try 1: Direct Attach API (if launcher runs on JDK)
+        if (tryDirectAttach(pid, agentJar, agentArgs)) return true;
+
+        // Try 2: Find a JDK on the system and use its tools.jar / attach module
+        if (tryJdkAttach(pid, agentJar, agentArgs)) return true;
+
+        // Try 3: Use jcmd if available
+        if (tryJcmd(pid, agentJar)) return true;
+
+        return false;
+    }
+
+    private boolean tryDirectAttach(String pid, String agentJar, String agentArgs) {
+        try {
+            Class<?> vmClass = Class.forName("com.sun.tools.attach.VirtualMachine");
+            Object vm = vmClass.getMethod("attach", String.class).invoke(null, pid);
+            try {
+                vmClass.getMethod("loadAgent", String.class, String.class).invoke(vm, agentJar, agentArgs);
+                return true;
+            } finally {
+                vmClass.getMethod("detach").invoke(vm);
+            }
+        } catch (ClassNotFoundException e) {
+            return false;
+        } catch (Exception e) {
+            System.err.println("[LIMP] Direct attach failed: " + e);
+            return false;
+        }
+    }
+
+    private boolean tryJdkAttach(String pid, String agentJar, String agentArgs) {
+        List<Path> searchPaths = new ArrayList<>();
+        String os = System.getProperty("os.name", "").toLowerCase();
+
+        if (os.contains("win")) {
+            searchPaths.add(Paths.get("C:\\Program Files\\Java"));
+            searchPaths.add(Paths.get("C:\\Program Files\\Eclipse Adoptium"));
+            searchPaths.add(Paths.get(System.getProperty("user.home"), ".jdks"));
+            String localApp = System.getenv("LOCALAPPDATA");
+            if (localApp != null) {
+                searchPaths.add(Paths.get(localApp, "Programs", "Eclipse Adoptium"));
+            }
+            String appdata = System.getenv("APPDATA");
+            if (appdata != null) {
+                searchPaths.add(Paths.get(appdata, "com.modrinth.theseus", "meta", "java_versions"));
+            }
+            // Minecraft's bundled Java runtime
+            if (appdata != null) {
+                searchPaths.add(Paths.get(appdata, ".minecraft", "runtime"));
+            }
+        } else {
+            searchPaths.add(Paths.get("/usr/lib/jvm"));
+            searchPaths.add(Paths.get(System.getProperty("user.home"), ".sdkman", "candidates", "java"));
+        }
+
+        for (Path searchDir : searchPaths) {
+            if (!Files.isDirectory(searchDir)) continue;
+            try {
+                // Walk up to 3 levels deep to find java executables
+                java.util.stream.Stream<Path> stream = Files.walk(searchDir, 3);
+                try {
+                    Iterator<Path> it = stream.iterator();
+                    while (it.hasNext()) {
+                        Path p = it.next();
+                        String name = p.getFileName().toString();
+                        boolean isJava = os.contains("win")
+                                ? name.equals("java.exe") && p.getParent().getFileName().toString().equals("bin")
+                                : name.equals("java") && p.getParent().getFileName().toString().equals("bin");
+                        if (isJava && Files.isExecutable(p)) {
+                            if (tryExternalAttach(p.toString(), pid, agentJar, agentArgs)) {
+                                return true;
+                            }
+                        }
+                    }
+                } finally {
+                    stream.close();
+                }
+            } catch (IOException ignored) {}
+        }
+        return false;
+    }
+
+    private boolean tryExternalAttach(String javaExe, String pid, String agentJar, String agentArgs) {
+        try {
+            Path tmpDir = Files.createTempDirectory("limp-attach-");
+            Path srcFile = tmpDir.resolve("LimpAttach.java");
+            String code = "import com.sun.tools.attach.VirtualMachine;\n"
+                    + "public class LimpAttach {\n"
+                    + "  public static void main(String[] a) throws Exception {\n"
+                    + "    VirtualMachine vm = VirtualMachine.attach(a[0]);\n"
+                    + "    vm.loadAgent(a[1], a[2]);\n"
+                    + "    vm.detach();\n"
+                    + "  }\n"
+                    + "}\n";
+            Files.write(srcFile, code.getBytes());
+
+            // Derive javac path from java path
+            String javacExe = javaExe.replace("java.exe", "javac.exe").replace("/java", "/javac");
+            if (javaExe.endsWith("/java")) javacExe = javaExe + "c";
+
+            Process compile = Runtime.getRuntime().exec(new String[]{javacExe, srcFile.toString()});
+            boolean compiled = compile.waitFor(10, java.util.concurrent.TimeUnit.SECONDS);
+            if (!compiled || compile.exitValue() != 0) {
+                deleteDir(tmpDir);
+                return false;
+            }
+
+            Process run = Runtime.getRuntime().exec(new String[]{
+                javaExe, "-cp", tmpDir.toString(), "LimpAttach", pid, agentJar, agentArgs
+            });
+            boolean finished = run.waitFor(15, java.util.concurrent.TimeUnit.SECONDS);
+            int exit = finished ? run.exitValue() : -1;
+            deleteDir(tmpDir);
+            return finished && exit == 0;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private boolean tryJcmd(String pid, String agentJar) {
+        String os = System.getProperty("os.name", "").toLowerCase();
+        String[] jcmdPaths;
+        if (os.contains("win")) {
+            jcmdPaths = new String[]{"jcmd.exe", "jcmd"};
+        } else {
+            jcmdPaths = new String[]{"jcmd", "/usr/bin/jcmd"};
+        }
+        for (String jcmd : jcmdPaths) {
+            try {
+                Process p = Runtime.getRuntime().exec(new String[]{jcmd, pid, "JVMTI.agent_load", agentJar});
+                boolean finished = p.waitFor(10, java.util.concurrent.TimeUnit.SECONDS);
+                if (finished && p.exitValue() == 0) return true;
+            } catch (Exception ignored) {}
+        }
+        return false;
+    }
+
+    private void deleteDir(Path dir) {
+        try {
+            java.util.stream.Stream<Path> stream = Files.walk(dir);
+            try {
+                List<Path> paths = new ArrayList<>();
+                Iterator<Path> it = stream.iterator();
+                while (it.hasNext()) paths.add(it.next());
+                Collections.reverse(paths);
+                for (Path p : paths) {
+                    try { Files.delete(p); } catch (Exception ignored) {}
+                }
+            } finally {
+                stream.close();
+            }
+        } catch (Exception ignored) {}
+    }
+
+    private void showSuccessOverlay(boolean mcWasRunning, boolean liveInjected) {
         JPanel overlay = new JPanel() {
             protected void paintComponent(Graphics g) {
                 Graphics2D g2 = (Graphics2D) g.create();
                 g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
                 g2.setColor(BG_DARK);
                 g2.fillRect(0, 0, getWidth(), getHeight());
-                // Glow circle
-                g2.setColor(new Color(ACCENT.getRed(), ACCENT.getGreen(), ACCENT.getBlue(), 20));
+                Color glow = liveInjected ? GREEN : ACCENT;
+                g2.setColor(new Color(glow.getRed(), glow.getGreen(), glow.getBlue(), 20));
                 g2.fillOval(getWidth() / 2 - 100, 40, 200, 200);
-                g2.setColor(new Color(ACCENT.getRed(), ACCENT.getGreen(), ACCENT.getBlue(), 10));
+                g2.setColor(new Color(glow.getRed(), glow.getGreen(), glow.getBlue(), 10));
                 g2.fillOval(getWidth() / 2 - 140, 20, 280, 260);
                 g2.dispose();
             }
@@ -638,16 +869,15 @@ public class LimpInjector {
         overlay.setLayout(new BoxLayout(overlay, BoxLayout.Y_AXIS));
         overlay.setBorder(new EmptyBorder(60, 40, 40, 40));
 
-        // Check icon
-        JLabel check = new JLabel("✓") {
+        JLabel check = new JLabel() {
             protected void paintComponent(Graphics g) {
                 Graphics2D g2 = (Graphics2D) g.create();
                 g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-                g2.setColor(ACCENT);
+                g2.setColor(liveInjected ? GREEN : ACCENT);
                 g2.fillOval(0, 0, 64, 64);
                 g2.setColor(Color.WHITE);
                 g2.setFont(new Font("SansSerif", Font.BOLD, 36));
-                g2.drawString("✓", 16, 48);
+                g2.drawString(liveInjected ? "⚡" : "✓", liveInjected ? 14 : 16, 48);
                 g2.dispose();
             }
         };
@@ -657,16 +887,22 @@ public class LimpInjector {
         overlay.add(check);
         overlay.add(Box.createVerticalStrut(24));
 
-        JLabel suc1 = new JLabel("LIMP Client Injected");
+        String titleText = liveInjected ? "LIMP Client Injected Live!" : "LIMP Client Installed";
+        JLabel suc1 = new JLabel(titleText);
         suc1.setFont(new Font("SansSerif", Font.BOLD, 24));
         suc1.setForeground(TEXT_WHITE);
         suc1.setAlignmentX(Component.CENTER_ALIGNMENT);
         overlay.add(suc1);
         overlay.add(Box.createVerticalStrut(8));
 
-        JLabel suc2 = new JLabel("Restart Minecraft to load the client.");
+        String msg2 = liveInjected
+                ? "Agent injected into running Minecraft — check in-game chat!"
+                : mcWasRunning
+                    ? "Mod installed. Restart Minecraft for full features."
+                    : "Mod installed. Start Minecraft to load the client.";
+        JLabel suc2 = new JLabel(msg2);
         suc2.setFont(new Font("SansSerif", Font.PLAIN, 14));
-        suc2.setForeground(TEXT_GRAY);
+        suc2.setForeground(liveInjected ? GREEN : TEXT_GRAY);
         suc2.setAlignmentX(Component.CENTER_ALIGNMENT);
         overlay.add(suc2);
         overlay.add(Box.createVerticalStrut(6));
