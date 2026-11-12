@@ -382,11 +382,33 @@ public class LimpInjector {
         card.add(mcStatusLabel);
         card.add(Box.createVerticalStrut(3));
 
+        JPanel pathRow = new JPanel(new BorderLayout(4, 0));
+        pathRow.setOpaque(false);
+        pathRow.setAlignmentX(0);
         mcPathLabel = new JLabel(detectedModsDir != null ? detectedModsDir.getParent().toString() : "");
         mcPathLabel.setFont(new Font("SansSerif", Font.PLAIN, 9));
         mcPathLabel.setForeground(TEXT_DIM);
-        mcPathLabel.setAlignmentX(0);
-        card.add(mcPathLabel);
+        pathRow.add(mcPathLabel, BorderLayout.CENTER);
+        JLabel changeBtn = new JLabel("[Change]");
+        changeBtn.setFont(new Font("SansSerif", Font.PLAIN, 9));
+        changeBtn.setForeground(ACCENT_LIGHT);
+        changeBtn.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        changeBtn.addMouseListener(new MouseAdapter() {
+            public void mouseClicked(MouseEvent e) {
+                JFileChooser chooser = new JFileChooser();
+                chooser.setDialogTitle("Select Modrinth profile or .minecraft folder");
+                chooser.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
+                if (detectedModsDir != null) chooser.setCurrentDirectory(detectedModsDir.getParent().toFile());
+                if (chooser.showOpenDialog(frame) == JFileChooser.APPROVE_OPTION) {
+                    Path mc = chooser.getSelectedFile().toPath();
+                    detectedModsDir = mc.getFileName().toString().equals("mods") ? mc : mc.resolve("mods");
+                    detectedName = mc.getFileName().toString() + " (manual)";
+                    updateStatusUI();
+                }
+            }
+        });
+        pathRow.add(changeBtn, BorderLayout.EAST);
+        card.add(pathRow);
         card.add(Box.createVerticalStrut(10));
 
         // Inject button - directly injects!
@@ -659,22 +681,78 @@ public class LimpInjector {
         try {
             selfPid = java.lang.management.ManagementFactory.getRuntimeMXBean().getName().split("@")[0];
         } catch (Exception ignored) {}
+        log("  Self PID: " + selfPid);
 
-        // Method 1: wmic with separate queries (OR can fail on some systems)
-        String pid = wmicFind("javaw.exe", selfPid);
+        // Method 1: PowerShell (works on Windows 10/11, wmic is deprecated)
+        String pid = powershellFind(selfPid);
+        if (pid != null) return pid;
+
+        // Method 2: tasklist
+        pid = tasklistFind(selfPid);
+        if (pid != null) return pid;
+
+        // Method 3: wmic fallback (deprecated but may work on older Windows)
+        pid = wmicFind("javaw.exe", selfPid);
         if (pid != null) return pid;
         pid = wmicFind("java.exe", selfPid);
         if (pid != null) return pid;
 
-        // Method 2: tasklist + wmic combo
-        pid = tasklistFind(selfPid);
-        if (pid != null) return pid;
-
-        // Method 3: jps (comes with JDK)
+        // Method 4: jps (comes with JDK)
         pid = jpsFind(selfPid);
         if (pid != null) return pid;
 
-        log("  All PID detection methods failed");
+        log("  All PID detection methods failed — is Minecraft running?");
+        return null;
+    }
+
+    private String powershellFind(String selfPid) {
+        try {
+            log("  powershell: searching...");
+            Process p = Runtime.getRuntime().exec(new String[]{
+                "powershell", "-NoProfile", "-Command",
+                "Get-CimInstance Win32_Process -Filter \"name='javaw.exe' OR name='java.exe'\" | Select-Object ProcessId,CommandLine | Format-List"
+            });
+            BufferedReader reader = new BufferedReader(new InputStreamReader(p.getInputStream()));
+            String line;
+            String currentPid = null;
+            String currentCmd = null;
+            List<String> allPids = new ArrayList<>();
+
+            while ((line = reader.readLine()) != null) {
+                line = line.trim();
+                if (line.startsWith("ProcessId")) {
+                    currentPid = line.split(":", 2)[1].trim();
+                } else if (line.startsWith("CommandLine")) {
+                    currentCmd = line.split(":", 2).length > 1 ? line.split(":", 2)[1].trim() : "";
+                }
+                if (currentPid != null && currentCmd != null) {
+                    if (!currentPid.equals(selfPid) && currentPid.matches("\\d+")) {
+                        String lower = currentCmd.toLowerCase();
+                        if (lower.contains("minecraft") || lower.contains("--gamedir") || lower.contains("lwjgl")
+                                || lower.contains("fabric") || lower.contains("net.fabricmc")) {
+                            log("  powershell: Minecraft PID " + currentPid);
+                            reader.close();
+                            p.waitFor();
+                            return currentPid;
+                        }
+                        allPids.add(currentPid);
+                    }
+                    currentPid = null;
+                    currentCmd = null;
+                }
+            }
+            reader.close();
+            p.waitFor();
+
+            log("  powershell: " + allPids.size() + " java process(es), none matched minecraft keywords");
+            // If only one java process and it's not us, probably Minecraft
+            if (allPids.size() == 1) {
+                log("  powershell: only 1 java process, using PID " + allPids.get(0));
+                return allPids.get(0);
+            }
+        } catch (Exception e) {
+            log("  powershell failed: " + e.getMessage());
+        }
         return null;
     }
 
@@ -1283,30 +1361,39 @@ public class LimpInjector {
     }
 
     private Path findModrinthProfile(String appdata, String localAppdata, String home) {
-        // Try ALL possible Modrinth data locations
+        // Try ALL possible Modrinth data locations — ModrinthApp FIRST (newer versions)
         List<Path> modrinthRoots = new ArrayList<>();
         if (appdata != null) {
-            modrinthRoots.add(Paths.get(appdata, "com.modrinth.theseus"));
             modrinthRoots.add(Paths.get(appdata, "ModrinthApp"));
             modrinthRoots.add(Paths.get(appdata, "modrinth"));
+            modrinthRoots.add(Paths.get(appdata, "com.modrinth.theseus"));
         }
         if (localAppdata != null) {
-            modrinthRoots.add(Paths.get(localAppdata, "com.modrinth.theseus"));
             modrinthRoots.add(Paths.get(localAppdata, "ModrinthApp"));
             modrinthRoots.add(Paths.get(localAppdata, "modrinth"));
+            modrinthRoots.add(Paths.get(localAppdata, "com.modrinth.theseus"));
         }
-        modrinthRoots.add(Paths.get(home, "AppData", "Roaming", "com.modrinth.theseus"));
-        modrinthRoots.add(Paths.get(home, "AppData", "Local", "com.modrinth.theseus"));
+        modrinthRoots.add(Paths.get(home, "AppData", "Roaming", "ModrinthApp"));
+        modrinthRoots.add(Paths.get(home, "AppData", "Local", "ModrinthApp"));
 
         for (Path root : modrinthRoots) {
-            if (!Files.isDirectory(root)) continue;
+            try {
+                if (!Files.isDirectory(root)) continue;
+                log("Modrinth root found: " + root);
 
-            // Check profiles subdirectory
-            Path profilesDir = root.resolve("profiles");
-            if (findModrinthProfileAt(profilesDir)) return detectedModsDir;
+                Path profilesDir = root.resolve("profiles");
+                if (findModrinthProfileAt(profilesDir)) {
+                    log("Profile found: " + detectedName + " -> " + detectedModsDir);
+                    return detectedModsDir;
+                }
 
-            // Also scan root itself for any folder containing mods/
-            if (findModrinthProfileAt(root)) return detectedModsDir;
+                if (findModrinthProfileAt(root)) {
+                    log("Profile found (root): " + detectedName + " -> " + detectedModsDir);
+                    return detectedModsDir;
+                }
+            } catch (Exception e) {
+                log("Modrinth root error (" + root + "): " + e.getMessage());
+            }
         }
         return null;
     }
@@ -1315,27 +1402,40 @@ public class LimpInjector {
         if (!Files.isDirectory(profilesDir)) return false;
         try (DirectoryStream<Path> stream = Files.newDirectoryStream(profilesDir)) {
             Path bestProfile = null;
-            int bestModCount = -1;
+            int bestScore = -1;
 
             for (Path profile : stream) {
                 if (!Files.isDirectory(profile)) continue;
+                String pName = profile.getFileName().toString().toLowerCase();
                 Path modsDir = profile.resolve("mods");
+
+                int modCount = 0;
                 if (Files.isDirectory(modsDir)) {
-                    // Count .jar files to find the most active profile
-                    int count = 0;
                     try (DirectoryStream<Path> mods = Files.newDirectoryStream(modsDir, "*.jar")) {
-                        for (Path m : mods) count++;
+                        for (Path m : mods) modCount++;
                     } catch (IOException ignored) {}
-                    if (count > bestModCount) {
-                        bestModCount = count;
-                        bestProfile = profile;
-                    }
                 }
-                // Profile might not have mods/ yet but has other MC files
-                if (bestProfile == null && (Files.exists(profile.resolve("options.txt"))
-                        || Files.isDirectory(profile.resolve("config")))) {
+
+                boolean hasMcFiles = modCount > 0
+                        || Files.exists(profile.resolve("options.txt"))
+                        || Files.isDirectory(profile.resolve("config"));
+                if (!hasMcFiles) continue;
+
+                // Score: mod count + bonus for matching version + bonus for recent modification
+                int score = modCount;
+                if (pName.contains("1.21.11") || pName.contains("1.21")) score += 500;
+                try {
+                    long lastMod = Files.getLastModifiedTime(profile).toMillis();
+                    long ageHours = (System.currentTimeMillis() - lastMod) / (3600_000);
+                    if (ageHours < 24) score += 200;
+                    else if (ageHours < 168) score += 100;
+                } catch (IOException ignored) {}
+
+                log("  Profile: " + profile.getFileName() + " (" + modCount + " mods, score=" + score + ")");
+
+                if (score > bestScore) {
+                    bestScore = score;
                     bestProfile = profile;
-                    bestModCount = 0;
                 }
             }
 
