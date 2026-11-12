@@ -655,25 +655,47 @@ public class LimpInjector {
     }
 
     private String findMinecraftPidWindows() {
+        String selfPid = "";
         try {
+            selfPid = java.lang.management.ManagementFactory.getRuntimeMXBean().getName().split("@")[0];
+        } catch (Exception ignored) {}
+
+        // Method 1: wmic with separate queries (OR can fail on some systems)
+        String pid = wmicFind("javaw.exe", selfPid);
+        if (pid != null) return pid;
+        pid = wmicFind("java.exe", selfPid);
+        if (pid != null) return pid;
+
+        // Method 2: tasklist + wmic combo
+        pid = tasklistFind(selfPid);
+        if (pid != null) return pid;
+
+        // Method 3: jps (comes with JDK)
+        pid = jpsFind(selfPid);
+        if (pid != null) return pid;
+
+        log("  All PID detection methods failed");
+        return null;
+    }
+
+    private String wmicFind(String procName, String selfPid) {
+        try {
+            log("  wmic: searching " + procName + "...");
             Process p = Runtime.getRuntime().exec(new String[]{
-                "cmd", "/c", "wmic process where \"name='javaw.exe' or name='java.exe'\" get ProcessId,CommandLine /FORMAT:CSV"
+                "cmd", "/c", "wmic process where \"name='" + procName + "'\" get ProcessId,CommandLine /FORMAT:CSV"
             });
             BufferedReader reader = new BufferedReader(new InputStreamReader(p.getInputStream()));
             String line;
-            String selfPid = "";
-            try {
-                selfPid = java.lang.management.ManagementFactory.getRuntimeMXBean().getName().split("@")[0];
-            } catch (Exception ignored) {}
-
             while ((line = reader.readLine()) != null) {
                 String lower = line.toLowerCase();
-                if ((lower.contains("net.minecraft") || lower.contains("--gamedir") || lower.contains("lwjgl"))
-                        && !lower.contains("limpinjector")) {
+                if ((lower.contains("net.minecraft") || lower.contains("--gamedir") || lower.contains("lwjgl")
+                        || lower.contains("minecraft") || lower.contains("fabric"))
+                        && !lower.contains("limpinjector") && !lower.contains("limpclient")) {
                     String[] parts = line.split(",");
                     if (parts.length >= 2) {
                         String pid = parts[parts.length - 1].trim();
                         if (!pid.isEmpty() && !pid.equals(selfPid) && pid.matches("\\d+")) {
+                            log("  wmic: found PID " + pid);
                             reader.close();
                             p.waitFor();
                             return pid;
@@ -683,7 +705,118 @@ public class LimpInjector {
             }
             reader.close();
             p.waitFor();
-        } catch (Exception ignored) {}
+            log("  wmic: no " + procName + " with minecraft found");
+        } catch (Exception e) {
+            log("  wmic failed: " + e.getMessage());
+        }
+        return null;
+    }
+
+    private String tasklistFind(String selfPid) {
+        try {
+            log("  tasklist: searching...");
+            // Get all java processes
+            Process p = Runtime.getRuntime().exec(new String[]{
+                "cmd", "/c", "tasklist /FI \"IMAGENAME eq javaw.exe\" /FO CSV /NH"
+            });
+            BufferedReader reader = new BufferedReader(new InputStreamReader(p.getInputStream()));
+            String line;
+            List<String> javaPids = new ArrayList<>();
+            while ((line = reader.readLine()) != null) {
+                // Format: "javaw.exe","12345","Console","1","123,456 K"
+                if (line.contains("javaw.exe")) {
+                    String[] parts = line.split(",");
+                    if (parts.length >= 2) {
+                        String pid = parts[1].replace("\"", "").trim();
+                        if (pid.matches("\\d+") && !pid.equals(selfPid)) {
+                            javaPids.add(pid);
+                        }
+                    }
+                }
+            }
+            reader.close();
+            p.waitFor();
+
+            // Also check java.exe
+            p = Runtime.getRuntime().exec(new String[]{
+                "cmd", "/c", "tasklist /FI \"IMAGENAME eq java.exe\" /FO CSV /NH"
+            });
+            reader = new BufferedReader(new InputStreamReader(p.getInputStream()));
+            while ((line = reader.readLine()) != null) {
+                if (line.contains("java.exe")) {
+                    String[] parts = line.split(",");
+                    if (parts.length >= 2) {
+                        String pid = parts[1].replace("\"", "").trim();
+                        if (pid.matches("\\d+") && !pid.equals(selfPid)) {
+                            javaPids.add(pid);
+                        }
+                    }
+                }
+            }
+            reader.close();
+            p.waitFor();
+
+            log("  tasklist: found " + javaPids.size() + " java process(es)");
+
+            if (javaPids.size() == 1) {
+                // Only one java process besides us — likely Minecraft
+                log("  tasklist: using PID " + javaPids.get(0));
+                return javaPids.get(0);
+            } else if (javaPids.size() > 1) {
+                // Multiple java processes — check each with wmic for MC indicators
+                for (String pid : javaPids) {
+                    try {
+                        Process wp = Runtime.getRuntime().exec(new String[]{
+                            "cmd", "/c", "wmic process where \"ProcessId=" + pid + "\" get CommandLine /FORMAT:CSV"
+                        });
+                        BufferedReader wr = new BufferedReader(new InputStreamReader(wp.getInputStream()));
+                        String wl;
+                        while ((wl = wr.readLine()) != null) {
+                            String lower = wl.toLowerCase();
+                            if (lower.contains("minecraft") || lower.contains("--gamedir") || lower.contains("lwjgl") || lower.contains("fabric")) {
+                                log("  tasklist: PID " + pid + " is Minecraft");
+                                wr.close();
+                                wp.waitFor();
+                                return pid;
+                            }
+                        }
+                        wr.close();
+                        wp.waitFor();
+                    } catch (Exception ignored) {}
+                }
+                // If we can't determine which is MC, use the first non-self one
+                log("  tasklist: can't determine MC, using first PID " + javaPids.get(0));
+                return javaPids.get(0);
+            }
+        } catch (Exception e) {
+            log("  tasklist failed: " + e.getMessage());
+        }
+        return null;
+    }
+
+    private String jpsFind(String selfPid) {
+        try {
+            log("  jps: searching...");
+            Process p = Runtime.getRuntime().exec(new String[]{"jps", "-l"});
+            BufferedReader reader = new BufferedReader(new InputStreamReader(p.getInputStream()));
+            String line;
+            while ((line = reader.readLine()) != null) {
+                String lower = line.toLowerCase();
+                if (lower.contains("minecraft") || lower.contains("net.fabricmc") || lower.contains("cpw.mods")) {
+                    String pid = line.trim().split("\\s+")[0];
+                    if (pid.matches("\\d+") && !pid.equals(selfPid)) {
+                        log("  jps: found PID " + pid);
+                        reader.close();
+                        p.waitFor();
+                        return pid;
+                    }
+                }
+            }
+            reader.close();
+            p.waitFor();
+        } catch (Exception e) {
+            log("  jps: not available");
+        }
         return null;
     }
 
@@ -1083,112 +1216,160 @@ public class LimpInjector {
         timer.start();
     }
 
-    // ── Detection (aggressive - finds Minecraft on any Windows setup) ──
+    // ── Detection — aggressively finds Modrinth/launcher profiles ──
     private void detectMinecraft() {
         String os = System.getProperty("os.name", "").toLowerCase();
         String home = System.getProperty("user.home", "");
 
-        List<Path> candidates = new ArrayList<>();
-
         if (os.contains("win")) {
             String appdata = System.getenv("APPDATA");
+            String localAppdata = System.getenv("LOCALAPPDATA");
 
-            // MODRINTH FIRST — user plays via Modrinth, its profiles must come before .minecraft
-            if (appdata != null) {
-                candidates.add(Paths.get(appdata, "com.modrinth.theseus", "profiles"));
-            }
-            candidates.add(Paths.get(home, "AppData", "Roaming", "com.modrinth.theseus", "profiles"));
+            // 1. MODRINTH — search aggressively for any profile with mods
+            Path modrinthFound = findModrinthProfile(appdata, localAppdata, home);
+            if (modrinthFound != null) return;
 
-            // PrismLauncher
-            if (appdata != null) {
-                candidates.add(Paths.get(appdata, "PrismLauncher", "instances"));
-            }
-            candidates.add(Paths.get(home, "AppData", "Roaming", "PrismLauncher", "instances"));
+            // 2. Other launchers
+            List<Path> launchers = new ArrayList<>();
+            if (appdata != null) launchers.add(Paths.get(appdata, "PrismLauncher", "instances"));
+            launchers.add(Paths.get(home, "AppData", "Roaming", "PrismLauncher", "instances"));
+            launchers.add(Paths.get(home, "curseforge", "minecraft", "Instances"));
+            launchers.add(Paths.get(home, "AppData", "Local", "MultiMC", "instances"));
+            if (appdata != null) launchers.add(Paths.get(appdata, "ATLauncher", "instances"));
+            if (appdata != null) launchers.add(Paths.get(appdata, "gdlauncher_next", "instances"));
+            launchers.add(Paths.get(home, ".lunarclient", "offline", "multiver"));
 
-            // CurseForge
-            candidates.add(Paths.get(home, "curseforge", "minecraft", "Instances"));
-
-            // MultiMC
-            candidates.add(Paths.get(home, "AppData", "Local", "MultiMC", "instances"));
-
-            // ATLauncher
-            if (appdata != null) {
-                candidates.add(Paths.get(appdata, "ATLauncher", "instances"));
+            for (Path dir : launchers) {
+                if (findInstanceIn(dir)) return;
             }
 
-            // GDLauncher
-            if (appdata != null) {
-                candidates.add(Paths.get(appdata, "gdlauncher_next", "instances"));
+            // 3. Standard .minecraft (LAST)
+            if (appdata != null && Files.isDirectory(Paths.get(appdata, ".minecraft"))) {
+                detectedModsDir = Paths.get(appdata, ".minecraft", "mods");
+                detectedName = "Minecraft (.minecraft)";
+                updateStatusUI();
+                return;
             }
-
-            // Feather / Lunar
-            candidates.add(Paths.get(home, ".lunarclient", "offline", "multiver"));
-
-            // Standard .minecraft LAST (fallback — most modded players use a launcher above)
-            if (appdata != null) {
-                candidates.add(Paths.get(appdata, ".minecraft"));
-            }
-            candidates.add(Paths.get(home, "AppData", "Roaming", ".minecraft"));
         } else if (os.contains("mac")) {
-            candidates.add(Paths.get(home, "Library", "Application Support", "minecraft"));
-            candidates.add(Paths.get(home, "Library", "Application Support", "com.modrinth.theseus", "profiles"));
-            candidates.add(Paths.get(home, "Library", "Application Support", "PrismLauncher", "instances"));
-        } else {
-            candidates.add(Paths.get(home, ".minecraft"));
-            candidates.add(Paths.get(home, ".local", "share", "PrismLauncher", "instances"));
-            candidates.add(Paths.get(home, ".modrinth", "profiles"));
-        }
-
-        // Check standard .minecraft first (most common)
-        for (Path mc : candidates) {
-            if (!Files.isDirectory(mc)) continue;
-
-            // Direct .minecraft folder (has versions, mods, or options.txt, or even just exists under .minecraft name)
-            String dirName = mc.getFileName().toString();
-            if (dirName.equals(".minecraft") || dirName.equals("minecraft")) {
-                // This IS the .minecraft folder
-                detectedModsDir = mc.resolve("mods");
+            String lib = home + "/Library/Application Support";
+            if (findModrinthProfileAt(Paths.get(lib, "com.modrinth.theseus", "profiles"))) return;
+            if (Files.isDirectory(Paths.get(lib, "minecraft"))) {
+                detectedModsDir = Paths.get(lib, "minecraft", "mods");
                 detectedName = "Minecraft";
                 updateStatusUI();
                 return;
             }
-
-            // Instance-based launchers: look inside for instances with .minecraft or mods
-            if (dirName.equals("profiles") || dirName.equals("instances") || dirName.equals("Instances")) {
-                try (DirectoryStream<Path> stream = Files.newDirectoryStream(mc)) {
-                    for (Path inst : stream) {
-                        if (!Files.isDirectory(inst)) continue;
-                        Path instMc = inst.resolve(".minecraft");
-                        if (Files.isDirectory(instMc)) {
-                            detectedModsDir = instMc.resolve("mods");
-                            detectedName = inst.getFileName().toString();
-                            updateStatusUI();
-                            return;
-                        }
-                        // Some launchers put mods directly in the instance
-                        if (Files.isDirectory(inst.resolve("mods")) || Files.exists(inst.resolve("options.txt"))) {
-                            detectedModsDir = inst.resolve("mods");
-                            detectedName = inst.getFileName().toString();
-                            updateStatusUI();
-                            return;
-                        }
-                    }
-                } catch (IOException ignored) {}
+        } else {
+            if (findModrinthProfileAt(Paths.get(home, ".modrinth", "profiles"))) return;
+            if (findInstanceIn(Paths.get(home, ".local", "share", "PrismLauncher", "instances"))) return;
+            if (Files.isDirectory(Paths.get(home, ".minecraft"))) {
+                detectedModsDir = Paths.get(home, ".minecraft", "mods");
+                detectedName = "Minecraft";
+                updateStatusUI();
+                return;
             }
         }
 
-        // Last resort: just use %APPDATA%\.minecraft even if it doesn't exist yet
+        // Absolute last resort
         String appdata = System.getenv("APPDATA");
         if (appdata != null) {
-            Path mc = Paths.get(appdata, ".minecraft");
-            detectedModsDir = mc.resolve("mods");
-            detectedName = "Minecraft (will create mods folder)";
+            detectedModsDir = Paths.get(appdata, ".minecraft", "mods");
+            detectedName = "Minecraft (default)";
             updateStatusUI();
             return;
         }
-
         detectedName = "Minecraft not found";
         updateStatusUI();
+    }
+
+    private Path findModrinthProfile(String appdata, String localAppdata, String home) {
+        // Try ALL possible Modrinth data locations
+        List<Path> modrinthRoots = new ArrayList<>();
+        if (appdata != null) {
+            modrinthRoots.add(Paths.get(appdata, "com.modrinth.theseus"));
+            modrinthRoots.add(Paths.get(appdata, "ModrinthApp"));
+            modrinthRoots.add(Paths.get(appdata, "modrinth"));
+        }
+        if (localAppdata != null) {
+            modrinthRoots.add(Paths.get(localAppdata, "com.modrinth.theseus"));
+            modrinthRoots.add(Paths.get(localAppdata, "ModrinthApp"));
+            modrinthRoots.add(Paths.get(localAppdata, "modrinth"));
+        }
+        modrinthRoots.add(Paths.get(home, "AppData", "Roaming", "com.modrinth.theseus"));
+        modrinthRoots.add(Paths.get(home, "AppData", "Local", "com.modrinth.theseus"));
+
+        for (Path root : modrinthRoots) {
+            if (!Files.isDirectory(root)) continue;
+
+            // Check profiles subdirectory
+            Path profilesDir = root.resolve("profiles");
+            if (findModrinthProfileAt(profilesDir)) return detectedModsDir;
+
+            // Also scan root itself for any folder containing mods/
+            if (findModrinthProfileAt(root)) return detectedModsDir;
+        }
+        return null;
+    }
+
+    private boolean findModrinthProfileAt(Path profilesDir) {
+        if (!Files.isDirectory(profilesDir)) return false;
+        try (DirectoryStream<Path> stream = Files.newDirectoryStream(profilesDir)) {
+            Path bestProfile = null;
+            int bestModCount = -1;
+
+            for (Path profile : stream) {
+                if (!Files.isDirectory(profile)) continue;
+                Path modsDir = profile.resolve("mods");
+                if (Files.isDirectory(modsDir)) {
+                    // Count .jar files to find the most active profile
+                    int count = 0;
+                    try (DirectoryStream<Path> mods = Files.newDirectoryStream(modsDir, "*.jar")) {
+                        for (Path m : mods) count++;
+                    } catch (IOException ignored) {}
+                    if (count > bestModCount) {
+                        bestModCount = count;
+                        bestProfile = profile;
+                    }
+                }
+                // Profile might not have mods/ yet but has other MC files
+                if (bestProfile == null && (Files.exists(profile.resolve("options.txt"))
+                        || Files.isDirectory(profile.resolve("config")))) {
+                    bestProfile = profile;
+                    bestModCount = 0;
+                }
+            }
+
+            if (bestProfile != null) {
+                detectedModsDir = bestProfile.resolve("mods");
+                detectedName = bestProfile.getFileName().toString() + " (Modrinth)";
+                updateStatusUI();
+                return true;
+            }
+        } catch (IOException ignored) {}
+        return false;
+    }
+
+    private boolean findInstanceIn(Path dir) {
+        if (!Files.isDirectory(dir)) return false;
+        try (DirectoryStream<Path> stream = Files.newDirectoryStream(dir)) {
+            for (Path inst : stream) {
+                if (!Files.isDirectory(inst)) continue;
+                Path instMc = inst.resolve(".minecraft");
+                if (Files.isDirectory(instMc)) {
+                    detectedModsDir = instMc.resolve("mods");
+                    detectedName = inst.getFileName().toString();
+                    updateStatusUI();
+                    return true;
+                }
+                if (Files.isDirectory(inst.resolve("mods")) || Files.exists(inst.resolve("options.txt"))) {
+                    detectedModsDir = inst.resolve("mods");
+                    detectedName = inst.getFileName().toString();
+                    updateStatusUI();
+                    return true;
+                }
+            }
+        } catch (IOException ignored) {}
+        return false;
     }
 
     private void updateStatusUI() {
