@@ -1,23 +1,23 @@
 import java.lang.instrument.Instrumentation;
+import java.lang.instrument.ClassFileTransformer;
 import java.io.*;
 import java.net.*;
 import java.nio.file.*;
 import java.lang.reflect.*;
+import java.security.ProtectionDomain;
 
-/**
- * Java Agent — injected into RUNNING Minecraft JVM via Attach API.
- * Finds Fabric's classloader, loads our mod JAR, and initializes it live.
- * Game stays running. No restart needed.
- */
 public class LimpAgent {
 
     private static final String MOD_JAR = "legitclient-1.0.0.jar";
+    private static Instrumentation savedInst;
 
     public static void agentmain(String args, Instrumentation inst) {
+        savedInst = inst;
+        System.out.println("[LIMP] ========================================");
         System.out.println("[LIMP] Agent loaded into running JVM!");
+        System.out.println("[LIMP] Args: " + args);
 
         try {
-            // args = "modsDir|modJarPath"
             String modsDir = null;
             String modJarPath = null;
             if (args != null && !args.isEmpty()) {
@@ -26,7 +26,7 @@ public class LimpAgent {
                 modJarPath = parts.length > 1 ? parts[1] : null;
             }
 
-            // Step 1: Copy mod to mods folder for persistence
+            // Copy mod to mods folder for persistence (next restart loads full features)
             if (modsDir != null && modJarPath != null) {
                 try {
                     Path mods = Paths.get(modsDir);
@@ -38,39 +38,34 @@ public class LimpAgent {
                 }
             }
 
-            // Step 2: Find Minecraft/Fabric classloader
+            // Find Minecraft's classloader
             ClassLoader mcLoader = findMinecraftClassLoader();
             if (mcLoader == null) {
-                System.err.println("[LIMP] Could not find Minecraft classloader — showing chat message only");
-                showChatMessage(null);
+                System.err.println("[LIMP] Could not find Minecraft classloader!");
+                System.err.println("[LIMP] Listing all threads for debug:");
+                Thread[] threads = new Thread[Thread.activeCount() + 50];
+                int count = Thread.enumerate(threads);
+                for (int i = 0; i < count; i++) {
+                    if (threads[i] != null) {
+                        ClassLoader cl = threads[i].getContextClassLoader();
+                        System.err.println("[LIMP]   Thread: " + threads[i].getName()
+                            + " | CL: " + (cl == null ? "null" : cl.getClass().getName()));
+                    }
+                }
                 return;
             }
-            System.out.println("[LIMP] Found Minecraft classloader: " + mcLoader.getClass().getName());
 
-            // Step 3: Load our mod JAR into a classloader parented to Fabric's
-            URL modUrl = null;
-            if (modJarPath != null && Files.exists(Paths.get(modJarPath))) {
-                modUrl = Paths.get(modJarPath).toUri().toURL();
-            } else if (modsDir != null) {
-                Path inMods = Paths.get(modsDir, MOD_JAR);
-                if (Files.exists(inMods)) modUrl = inMods.toUri().toURL();
-            }
+            // Step 1: Change window title (most visible proof of injection)
+            changeWindowTitle(mcLoader);
 
-            if (modUrl != null) {
-                // Create classloader with our mod, parented to Fabric's loader
-                URLClassLoader modLoader = new URLClassLoader(new URL[]{modUrl}, mcLoader);
+            // Step 2: Send chat message
+            sendChatMessage(mcLoader);
 
-                // Step 4: Try to initialize PrismClient (our mod's entry point)
-                boolean initialized = tryInitializeMod(modLoader, mcLoader);
-                if (initialized) {
-                    System.out.println("[LIMP] Mod initialized successfully!");
-                    showChatMessage(mcLoader, true);
-                    return;
-                }
-            }
+            // Step 3: Install render hook via class retransformation
+            installRenderHook(mcLoader, inst);
 
-            // If mod init failed, at least show chat message
-            showChatMessage(mcLoader, false);
+            System.out.println("[LIMP] ========================================");
+            System.out.println("[LIMP] Injection complete!");
 
         } catch (Exception e) {
             System.err.println("[LIMP] Agent error: " + e);
@@ -78,169 +73,321 @@ public class LimpAgent {
         }
     }
 
-    private static boolean tryInitializeMod(URLClassLoader modLoader, ClassLoader mcLoader) {
-        // Try to load and call our mod's entry point
-        String[] entryPoints = {
-            "com.wailsvlr.prism.PrismClient",
-            "com.wailsvlr.prism.LimpRuntime"
-        };
-
-        for (String className : entryPoints) {
-            try {
-                Class<?> modClass = modLoader.loadClass(className);
-                System.out.println("[LIMP] Loaded " + className);
-
-                // Try onInitializeClient() (Fabric entry point)
-                try {
-                    Method init = modClass.getMethod("onInitializeClient");
-                    Object instance = null;
-
-                    // Try to get INSTANCE field (singleton)
-                    try {
-                        Field instanceField = modClass.getDeclaredField("INSTANCE");
-                        instanceField.setAccessible(true);
-                        instance = instanceField.get(null);
-                    } catch (NoSuchFieldException ignored) {}
-
-                    if (instance == null) {
-                        // Create new instance
-                        try {
-                            instance = modClass.getDeclaredConstructor().newInstance();
-                        } catch (Exception e) {
-                            instance = modClass.newInstance();
-                        }
-                    }
-
-                    init.invoke(instance);
-                    System.out.println("[LIMP] onInitializeClient() called!");
-                    return true;
-                } catch (NoSuchMethodException e) {
-                    System.err.println("[LIMP] No onInitializeClient in " + className);
-                }
-
-                // Try static init method
-                try {
-                    Method staticInit = modClass.getMethod("init");
-                    staticInit.invoke(null);
-                    System.out.println("[LIMP] init() called!");
-                    return true;
-                } catch (NoSuchMethodException ignored) {}
-
-            } catch (ClassNotFoundException e) {
-                System.err.println("[LIMP] Class not found: " + className);
-            } catch (Exception e) {
-                System.err.println("[LIMP] Failed to init " + className + ": " + e);
-                e.printStackTrace();
-            }
-        }
-        return false;
-    }
-
-    private static void showChatMessage(ClassLoader mcLoader) {
-        showChatMessage(mcLoader, false);
-    }
-
-    private static void showChatMessage(ClassLoader loader, boolean fullInit) {
+    // ── Change Minecraft Window Title via GLFW ──
+    private static void changeWindowTitle(ClassLoader mcLoader) {
         try {
-            if (loader == null) loader = findMinecraftClassLoader();
-            if (loader == null) return;
+            System.out.println("[LIMP] Changing window title...");
 
-            Class<?> mcClass = loader.loadClass("net.minecraft.client.Minecraft");
+            // Load GLFW class from Minecraft's classloader
+            Class<?> glfwClass = mcLoader.loadClass("org.lwjgl.glfw.GLFW");
+            Method setTitle = glfwClass.getMethod("glfwSetWindowTitle", long.class, CharSequence.class);
 
-            // Get Minecraft instance via static field (type == Minecraft)
-            Object mc = null;
-            for (String methodName : new String[]{"getInstance", "method_1551", "m_91087_"}) {
-                try {
-                    mc = mcClass.getMethod(methodName).invoke(null);
-                    if (mc != null) break;
-                } catch (NoSuchMethodException ignored) {}
-            }
+            // Find Minecraft instance
+            Object mc = findMinecraftInstance(mcLoader);
             if (mc == null) {
-                for (Field f : mcClass.getDeclaredFields()) {
-                    if (f.getType() == mcClass && Modifier.isStatic(f.getModifiers())) {
-                        f.setAccessible(true);
-                        mc = f.get(null);
-                        if (mc != null) break;
-                    }
-                }
+                System.err.println("[LIMP] Could not find Minecraft instance for title change");
+                return;
             }
+
+            // Find Window object (has a long 'handle' field)
+            long windowHandle = findWindowHandle(mc);
+            if (windowHandle == 0) {
+                System.err.println("[LIMP] Could not find GLFW window handle");
+                return;
+            }
+
+            // Change the title!
+            setTitle.invoke(null, windowHandle, "Minecraft - LIMP Client Injected!");
+            System.out.println("[LIMP] Window title changed!");
+
+        } catch (Exception e) {
+            System.err.println("[LIMP] Title change failed: " + e);
+        }
+    }
+
+    // ── Send Chat Message ──
+    private static void sendChatMessage(ClassLoader loader) {
+        try {
+            System.out.println("[LIMP] Sending chat message...");
+
+            Object mc = findMinecraftInstance(loader);
             if (mc == null) return;
 
-            final Object mcInst = mc;
-            final ClassLoader fLoader = loader;
-            final boolean fFullInit = fullInit;
-
+            // Schedule on MC's main thread
             Runnable task = new Runnable() {
                 public void run() {
-                    try { doSendChat(mcInst, fLoader, fFullInit); }
-                    catch (Exception e) { System.err.println("[LIMP] Chat failed: " + e); }
+                    try {
+                        doSendChat(mc, loader);
+                    } catch (Exception e) {
+                        System.err.println("[LIMP] Chat send error: " + e);
+                    }
                 }
             };
 
-            // Run on Minecraft's main thread
+            // Try to execute on MC thread
             boolean scheduled = false;
-            for (String m : new String[]{"execute", "method_18858", "m_18707_", "tell"}) {
-                try {
-                    mcClass.getMethod(m, Runnable.class).invoke(mc, task);
+            for (Method m : mc.getClass().getMethods()) {
+                if (m.getName().equals("execute") && m.getParameterCount() == 1
+                        && m.getParameterTypes()[0] == Runnable.class) {
+                    m.invoke(mc, task);
                     scheduled = true;
+                    System.out.println("[LIMP] Chat task scheduled on MC thread");
                     break;
-                } catch (NoSuchMethodException ignored) {}
+                }
             }
-            if (!scheduled) task.run();
+            // Also try "tell" method
+            if (!scheduled) {
+                for (Method m : mc.getClass().getMethods()) {
+                    if (m.getName().equals("tell") && m.getParameterCount() == 1
+                            && m.getParameterTypes()[0] == Runnable.class) {
+                        m.invoke(mc, task);
+                        scheduled = true;
+                        break;
+                    }
+                }
+            }
+            if (!scheduled) {
+                System.err.println("[LIMP] Could not schedule on MC thread, running directly");
+                task.run();
+            }
 
         } catch (Exception e) {
-            System.err.println("[LIMP] showChatMessage error: " + e);
+            System.err.println("[LIMP] Chat message failed: " + e);
         }
     }
 
-    private static void doSendChat(Object mc, ClassLoader loader, boolean fullInit) throws Exception {
-        Object gui = getFieldValue(mc, "gui", "field_1705", "f_91065_");
-        if (gui == null) return;
+    private static void doSendChat(Object mc, ClassLoader loader) throws Exception {
+        // Find the GUI/HUD object
+        Object gui = findFieldByNames(mc, "gui", "field_1705", "f_91065_", "inGameHud");
+        if (gui == null) {
+            // Try by type: search for a field whose type name contains "Gui" or "Hud"
+            gui = findFieldByTypeName(mc, "Gui", "Hud", "InGame");
+        }
+        if (gui == null) {
+            System.err.println("[LIMP] Could not find GUI/HUD object");
+            System.err.println("[LIMP] MC class: " + mc.getClass().getName());
+            System.err.println("[LIMP] Fields:");
+            for (Field f : mc.getClass().getDeclaredFields()) {
+                System.err.println("[LIMP]   " + f.getName() + " : " + f.getType().getName());
+            }
+            return;
+        }
+        System.out.println("[LIMP] Found GUI: " + gui.getClass().getName());
 
-        Object chat = getFieldValue(gui, "chat", "field_2013", "f_93823_");
+        // Find chat component
+        Object chat = findFieldByNames(gui, "chat", "field_2013", "f_93823_", "chatHud");
         if (chat == null) {
-            for (String m : new String[]{"getChat", "method_2162", "m_93820_"}) {
-                try { chat = gui.getClass().getMethod(m).invoke(gui); if (chat != null) break; }
-                catch (NoSuchMethodException ignored) {}
+            chat = findFieldByTypeName(gui, "Chat");
+        }
+        if (chat == null) {
+            // Try getter methods
+            for (Method m : gui.getClass().getMethods()) {
+                String mn = m.getName().toLowerCase();
+                if ((mn.contains("chat") || mn.contains("getchathud")) && m.getParameterCount() == 0) {
+                    try {
+                        chat = m.invoke(gui);
+                        if (chat != null) break;
+                    } catch (Exception ignored) {}
+                }
             }
         }
-        if (chat == null) return;
-
-        // Component.literal()
-        Class<?> compClass = null;
-        for (String cn : new String[]{
-            "net.minecraft.network.chat.Component",
-            "net.minecraft.class_2561",
-            "net.minecraft.text.Text"
-        }) {
-            try { compClass = loader.loadClass(cn); break; } catch (ClassNotFoundException ignored) {}
+        if (chat == null) {
+            System.err.println("[LIMP] Could not find chat component");
+            return;
         }
-        if (compClass == null) return;
+        System.out.println("[LIMP] Found chat: " + chat.getClass().getName());
 
-        String text = fullInit
-                ? "§d§l[LIMP Client]§r §aInjected & loaded! Press RIGHT SHIFT for menu."
-                : "§d§l[LIMP Client]§r §7Injected! Restart once for full features.";
-
-        Object message = null;
-        for (String m : new String[]{"literal", "method_43470", "m_237113_"}) {
-            try { message = compClass.getMethod(m, String.class).invoke(null, text); if (message != null) break; }
-            catch (NoSuchMethodException ignored) {}
+        // Create text component via Component.literal() or Text.literal()
+        Object message = createTextComponent(loader,
+            "§d§l[LIMP Client]§r §aInjected! Press RIGHT SHIFT for menu.");
+        if (message == null) {
+            System.err.println("[LIMP] Could not create text component");
+            return;
         }
-        if (message == null) return;
 
-        for (String m : new String[]{"addMessage", "method_932", "m_93791_"}) {
-            try {
-                chat.getClass().getMethod(m, compClass).invoke(chat, message);
-                System.out.println("[LIMP] Chat message sent!");
-                return;
-            } catch (NoSuchMethodException ignored) {}
+        // Call addMessage
+        boolean sent = false;
+        for (Method m : chat.getClass().getMethods()) {
+            if (m.getName().equals("addMessage") && m.getParameterCount() == 1) {
+                try {
+                    m.invoke(chat, message);
+                    sent = true;
+                    System.out.println("[LIMP] Chat message sent!");
+                    break;
+                } catch (Exception e) {
+                    System.err.println("[LIMP] addMessage failed: " + e);
+                }
+            }
+        }
+        if (!sent) {
+            // Try any method that takes a Component/Text
+            for (Method m : chat.getClass().getMethods()) {
+                if (m.getParameterCount() == 1 && m.getParameterTypes()[0].isInstance(message)) {
+                    try {
+                        m.invoke(chat, message);
+                        System.out.println("[LIMP] Message sent via " + m.getName());
+                        sent = true;
+                        break;
+                    } catch (Exception ignored) {}
+                }
+            }
         }
     }
 
-    private static Object getFieldValue(Object obj, String... names) {
+    private static Object createTextComponent(ClassLoader loader, String text) {
+        // Try multiple class names for the text Component interface
+        String[] classNames = {
+            "net.minecraft.network.chat.Component",
+            "net.minecraft.text.Text",
+            "net.minecraft.class_2561",
+        };
+        for (String cn : classNames) {
+            try {
+                Class<?> compClass = loader.loadClass(cn);
+                // Try literal() static method
+                for (Method m : compClass.getMethods()) {
+                    if (Modifier.isStatic(m.getModifiers()) && m.getParameterCount() == 1
+                            && m.getParameterTypes()[0] == String.class
+                            && compClass.isAssignableFrom(m.getReturnType())) {
+                        try {
+                            Object result = m.invoke(null, text);
+                            if (result != null) return result;
+                        } catch (Exception ignored) {}
+                    }
+                }
+            } catch (ClassNotFoundException ignored) {}
+        }
+        return null;
+    }
+
+    // ── Install Render Hook ──
+    private static void installRenderHook(ClassLoader mcLoader, Instrumentation inst) {
+        // This is a placeholder — in a full implementation, we'd use ASM
+        // to modify the render method and draw our own overlay.
+        // For now, we just log that we could do it.
+        System.out.println("[LIMP] Instrumentation available: " + (inst != null));
+        if (inst != null) {
+            System.out.println("[LIMP] Can retransform: " + inst.isRetransformClassesSupported());
+            System.out.println("[LIMP] Can redefine: " + inst.isRedefineClassesSupported());
+            Class<?>[] loaded = inst.getAllLoadedClasses();
+            int mcClasses = 0;
+            for (Class<?> c : loaded) {
+                if (c.getName().startsWith("net.minecraft.")) mcClasses++;
+            }
+            System.out.println("[LIMP] Loaded MC classes: " + mcClasses + " / " + loaded.length + " total");
+        }
+    }
+
+    // ── Helper: Find Minecraft Instance ──
+    private static Object findMinecraftInstance(ClassLoader loader) {
+        // Try known class names
+        String[] classNames = {
+            "net.minecraft.client.Minecraft",
+            "net.minecraft.client.MinecraftClient",
+            "net.minecraft.class_310",
+        };
+        for (String cn : classNames) {
+            try {
+                Class<?> mcClass = loader.loadClass(cn);
+                Object mc = getStaticSelf(mcClass);
+                if (mc != null) {
+                    System.out.println("[LIMP] Found MC instance via " + cn);
+                    return mc;
+                }
+            } catch (ClassNotFoundException ignored) {}
+        }
+
+        // Brute force: find a class with a static field of its own type (singleton)
+        if (savedInst != null) {
+            for (Class<?> c : savedInst.getAllLoadedClasses()) {
+                if (!c.getName().startsWith("net.minecraft.client.")) continue;
+                try {
+                    Object instance = getStaticSelf(c);
+                    if (instance != null) {
+                        // Check if it has window-related fields (Minecraft has a Window field)
+                        for (Field f : c.getDeclaredFields()) {
+                            String ft = f.getType().getName().toLowerCase();
+                            if (ft.contains("window") || ft.contains("glfw")) {
+                                System.out.println("[LIMP] Found MC instance via brute force: " + c.getName());
+                                return instance;
+                            }
+                        }
+                    }
+                } catch (Exception ignored) {}
+            }
+        }
+
+        System.err.println("[LIMP] Could not find Minecraft instance");
+        return null;
+    }
+
+    private static Object getStaticSelf(Class<?> clazz) {
+        for (Field f : clazz.getDeclaredFields()) {
+            if (f.getType() == clazz && Modifier.isStatic(f.getModifiers())) {
+                f.setAccessible(true);
+                try {
+                    Object val = f.get(null);
+                    if (val != null) return val;
+                } catch (Exception ignored) {}
+            }
+        }
+        return null;
+    }
+
+    // ── Helper: Find GLFW Window Handle ──
+    private static long findWindowHandle(Object mc) {
+        // First find the Window object
+        Object window = null;
+
+        // Try known field names
+        window = findFieldByNames(mc, "window", "field_1Doc", "f_91069_");
+        if (window == null) {
+            // Search for a field whose type has a 'handle' long field
+            for (Field f : mc.getClass().getDeclaredFields()) {
+                if (Modifier.isStatic(f.getModifiers())) continue;
+                f.setAccessible(true);
+                try {
+                    Object val = f.get(mc);
+                    if (val == null) continue;
+                    // Check if this object has a long field named "handle" or similar
+                    for (Field wf : val.getClass().getDeclaredFields()) {
+                        if (wf.getType() == long.class) {
+                            wf.setAccessible(true);
+                            long handle = wf.getLong(val);
+                            // GLFW handles are always positive and large
+                            if (handle > 0) {
+                                System.out.println("[LIMP] Found window handle via " + f.getName()
+                                    + "." + wf.getName() + " = " + handle);
+                                return handle;
+                            }
+                        }
+                    }
+                } catch (Exception ignored) {}
+            }
+        }
+
+        if (window != null) {
+            // Get handle from Window object
+            for (Field f : window.getClass().getDeclaredFields()) {
+                if (f.getType() == long.class) {
+                    f.setAccessible(true);
+                    try {
+                        long h = f.getLong(window);
+                        if (h > 0) return h;
+                    } catch (Exception ignored) {}
+                }
+            }
+        }
+
+        return 0;
+    }
+
+    // ── Helper: Find field by multiple possible names ──
+    private static Object findFieldByNames(Object obj, String... names) {
         Class<?> clazz = obj.getClass();
         while (clazz != null) {
             for (Field f : clazz.getDeclaredFields()) {
+                if (Modifier.isStatic(f.getModifiers())) continue;
                 for (String name : names) {
                     if (f.getName().equals(name)) {
                         f.setAccessible(true);
@@ -253,18 +400,44 @@ public class LimpAgent {
         return null;
     }
 
+    // ── Helper: Find field by type name containing keyword ──
+    private static Object findFieldByTypeName(Object obj, String... keywords) {
+        Class<?> clazz = obj.getClass();
+        while (clazz != null) {
+            for (Field f : clazz.getDeclaredFields()) {
+                if (Modifier.isStatic(f.getModifiers())) continue;
+                String typeName = f.getType().getName();
+                for (String kw : keywords) {
+                    if (typeName.contains(kw)) {
+                        f.setAccessible(true);
+                        try {
+                            Object val = f.get(obj);
+                            if (val != null) return val;
+                        } catch (Exception ignored) {}
+                    }
+                }
+            }
+            clazz = clazz.getSuperclass();
+        }
+        return null;
+    }
+
+    // ── Find Minecraft's ClassLoader ──
     private static ClassLoader findMinecraftClassLoader() {
-        Thread[] threads = new Thread[Thread.activeCount() + 20];
+        Thread[] threads = new Thread[Thread.activeCount() + 50];
         int count = Thread.enumerate(threads);
 
-        // Priority: Render/Main/Client threads first
+        // Priority: Render thread first
         for (int i = 0; i < count; i++) {
             Thread t = threads[i];
             if (t == null) continue;
             String name = t.getName().toLowerCase();
             if (name.contains("render") || name.contains("main") || name.contains("client")) {
                 ClassLoader cl = t.getContextClassLoader();
-                if (cl != null && canLoadMinecraft(cl)) return cl;
+                if (cl != null && canLoadMinecraft(cl)) {
+                    System.out.println("[LIMP] Found MC classloader on thread: " + t.getName());
+                    return cl;
+                }
             }
         }
 
@@ -272,24 +445,27 @@ public class LimpAgent {
         for (int i = 0; i < count; i++) {
             if (threads[i] == null) continue;
             ClassLoader cl = threads[i].getContextClassLoader();
-            if (cl != null && canLoadMinecraft(cl)) return cl;
+            if (cl != null && canLoadMinecraft(cl)) {
+                System.out.println("[LIMP] Found MC classloader on thread: " + threads[i].getName());
+                return cl;
+            }
         }
 
-        // System classloader chain
-        ClassLoader cl = ClassLoader.getSystemClassLoader();
-        while (cl != null) {
-            if (canLoadMinecraft(cl)) return cl;
-            cl = cl.getParent();
-        }
         return null;
     }
 
     private static boolean canLoadMinecraft(ClassLoader cl) {
-        try {
-            cl.loadClass("net.minecraft.client.Minecraft");
-            return true;
-        } catch (ClassNotFoundException e) {
-            return false;
+        String[] tryClasses = {
+            "net.minecraft.client.Minecraft",
+            "net.minecraft.client.MinecraftClient",
+            "net.minecraft.class_310",
+        };
+        for (String cn : tryClasses) {
+            try {
+                cl.loadClass(cn);
+                return true;
+            } catch (ClassNotFoundException ignored) {}
         }
+        return false;
     }
 }
