@@ -1,0 +1,20 @@
+{
+	"required": true,
+	"package": "net.feathermc.client.mixin",
+	"compatibilityLevel": "JAVA_21",
+	"client": [
+		"MixinGameRenderer",
+		"MixinGui",
+		"MixinKeyboardHandler",
+		"MixinLightTexture",
+		"MixinLocalPlayer",
+		"MixinMinecraft",
+		"MixinMouseHandler",
+		"MixinOptions",
+		"MixinLevelRenderer",
+		"MixinWindow"
+	],
+	"injectors": {
+		"defaultRequire": 1
+	}
+}

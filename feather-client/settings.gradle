@@ -1,0 +1,25 @@
+pluginManagement {
+	repositories {
+		maven {
+			name = 'Fabric'
+			url = 'https://maven.fabricmc.net/'
+		}
+		maven {
+			name = 'Google Maven Central Mirror'
+			url = 'https://maven-central.storage-download.googleapis.com/maven2/'
+		}
+		mavenCentral()
+		gradlePluginPortal()
+	}
+}
+
+dependencyResolutionManagement {
+	repositories {
+		maven {
+			name = 'Google Maven Central Mirror'
+			url = 'https://maven-central.storage-download.googleapis.com/maven2/'
+		}
+	}
+}
+
+rootProject.name = 'feather-client'

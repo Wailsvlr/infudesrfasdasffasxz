@@ -1,0 +1,28 @@
+{
+	"schemaVersion": 1,
+	"id": "featherclient",
+	"version": "${version}",
+	"name": "Feather Client",
+	"description": "Feather Client rebuilt as a Fabric mod — performance, HUD modules, and visual enhancements.",
+	"authors": ["Wailsvlr"],
+	"license": "All-Rights-Reserved",
+	"icon": "assets/feathermc/icon.png",
+	"environment": "client",
+	"entrypoints": {
+		"client": [
+			"net.feathermc.client.FeatherClient"
+		]
+	},
+	"mixins": [
+		{
+			"config": "featherclient.mixins.json",
+			"environment": "client"
+		}
+	],
+	"depends": {
+		"fabricloader": ">=0.16.0",
+		"minecraft": "~1.21.4",
+		"java": ">=21",
+		"fabric-api": "*"
+	}
+}
