@@ -15,9 +15,11 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 @Mixin(KeyboardHandler.class)
 public class MixinKeyboardHandler {
     @Inject(method = "keyPress", at = @At("HEAD"))
-    private void onKey(long window, int key, int scancode, int action, int modifiers, CallbackInfo ci) {
+    private void onKey(long window, int action, net.minecraft.client.input.KeyEvent keyEvent, CallbackInfo ci) {
         if (window != Minecraft.getInstance().getWindow().handle()) return;
         if (Minecraft.getInstance().screen != null) return;
+
+        int key = keyEvent.key();
 
         if (FeatherClient.getInstance() != null) {
             FeatherClient.getInstance().getEventBus().post(new KeyEvent(key, action));
