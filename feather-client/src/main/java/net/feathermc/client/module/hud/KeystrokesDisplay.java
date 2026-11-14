@@ -39,8 +39,8 @@ public class KeystrokesDisplay extends HudModule {
         // Row 3: Mouse buttons
         if (showMouse.getValue()) {
             int halfW = (KEY_SIZE * 3 + GAP * 2 - GAP) / 2;
-            boolean lmb = GLFW.glfwGetMouseButton(mc.getWindow().getWindow(), GLFW.GLFW_MOUSE_BUTTON_LEFT) == GLFW.GLFW_PRESS;
-            boolean rmb = GLFW.glfwGetMouseButton(mc.getWindow().getWindow(), GLFW.GLFW_MOUSE_BUTTON_RIGHT) == GLFW.GLFW_PRESS;
+            boolean lmb = GLFW.glfwGetMouseButton(mc.getWindow().handle(), GLFW.GLFW_MOUSE_BUTTON_LEFT) == GLFW.GLFW_PRESS;
+            boolean rmb = GLFW.glfwGetMouseButton(mc.getWindow().handle(), GLFW.GLFW_MOUSE_BUTTON_RIGHT) == GLFW.GLFW_PRESS;
             renderBox(graphics, "LMB", bx, nextY, halfW, KEY_SIZE, lmb);
             renderBox(graphics, "RMB", bx + halfW + GAP, nextY, halfW, KEY_SIZE, rmb);
             nextY += KEY_SIZE + GAP;

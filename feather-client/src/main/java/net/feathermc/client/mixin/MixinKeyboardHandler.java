@@ -16,7 +16,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 public class MixinKeyboardHandler {
     @Inject(method = "keyPress", at = @At("HEAD"))
     private void onKey(long window, int key, int scancode, int action, int modifiers, CallbackInfo ci) {
-        if (window != Minecraft.getInstance().getWindow().getWindow()) return;
+        if (window != Minecraft.getInstance().getWindow().handle()) return;
         if (Minecraft.getInstance().screen != null) return;
 
         if (FeatherClient.getInstance() != null) {

@@ -22,8 +22,8 @@ public class CPSDisplay extends HudModule {
     public void onTick(TickEvent event) {
         if (mc.screen != null) return;
         long now = System.currentTimeMillis();
-        boolean leftDown = GLFW.glfwGetMouseButton(mc.getWindow().getWindow(), GLFW.GLFW_MOUSE_BUTTON_LEFT) == GLFW.GLFW_PRESS;
-        boolean rightDown = GLFW.glfwGetMouseButton(mc.getWindow().getWindow(), GLFW.GLFW_MOUSE_BUTTON_RIGHT) == GLFW.GLFW_PRESS;
+        boolean leftDown = GLFW.glfwGetMouseButton(mc.getWindow().handle(), GLFW.GLFW_MOUSE_BUTTON_LEFT) == GLFW.GLFW_PRESS;
+        boolean rightDown = GLFW.glfwGetMouseButton(mc.getWindow().handle(), GLFW.GLFW_MOUSE_BUTTON_RIGHT) == GLFW.GLFW_PRESS;
         if (leftDown && !leftWasDown) leftClicks.add(now);
         if (rightDown && !rightWasDown) rightClicks.add(now);
         leftWasDown = leftDown;

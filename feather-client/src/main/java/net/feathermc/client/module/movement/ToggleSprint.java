@@ -15,7 +15,7 @@ public class ToggleSprint extends Module {
     @Subscribe
     public void onTick(TickEvent event) {
         if (mc.player == null || mc.level == null) return;
-        boolean forward = mc.player.input.forwardImpulse > 0;
+        boolean forward = mc.player.input.hasForwardImpulse();
         boolean canSprint = forward && !mc.player.isSprinting()
                 && !mc.player.isShiftKeyDown()
                 && !mc.player.isUsingItem()

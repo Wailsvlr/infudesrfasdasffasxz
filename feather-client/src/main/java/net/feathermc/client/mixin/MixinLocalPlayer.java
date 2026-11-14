@@ -17,7 +17,7 @@ public class MixinLocalPlayer {
         LocalPlayer player = (LocalPlayer) (Object) this;
 
         ToggleSprint sprint = FeatherClient.getInstance().getModuleManager().getModule(ToggleSprint.class);
-        if (sprint != null && sprint.isEnabled() && player.input.forwardImpulse > 0 && !player.isCrouching()
+        if (sprint != null && sprint.isEnabled() && player.input.hasForwardImpulse() && !player.isCrouching()
                 && !player.isUsingItem() && player.getFoodData().getFoodLevel() > 6) {
             player.setSprinting(true);
         }

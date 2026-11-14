@@ -19,7 +19,7 @@ public class NickHider extends Module {
 
     public String processName(String original) {
         if (!isEnabled() || mc.player == null) return original;
-        String realName = mc.player.getGameProfile().getName();
+        String realName = mc.player.getGameProfile().name();
         if (original.contains(realName)) {
             return original.replace(realName, fakeName);
         }

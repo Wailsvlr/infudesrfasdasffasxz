@@ -6,6 +6,7 @@ import net.feathermc.client.module.Module.*;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.gui.components.Button;
+import net.minecraft.client.input.MouseButtonEvent;
 import net.minecraft.network.chat.Component;
 
 import java.util.List;
@@ -117,7 +118,9 @@ public class FeatherSettingsScreen extends Screen {
     }
 
     @Override
-    public boolean mouseClicked(double mouseX, double mouseY, int button) {
+    public boolean mouseClicked(MouseButtonEvent event, boolean focused) {
+        double mouseX = event.x();
+        double mouseY = event.y();
         int listX = SIDEBAR_WIDTH + 10;
         int listY = HEADER_HEIGHT + 10;
         int listWidth = selectedModule == null ? width - SIDEBAR_WIDTH - 20 : (width - SIDEBAR_WIDTH) / 2 - 15;
@@ -137,7 +140,6 @@ public class FeatherSettingsScreen extends Screen {
             }
         }
 
-        // Settings interactions
         if (selectedModule != null) {
             int settX = listX + listWidth + 10;
             int settWidth = width - settX - 10;
@@ -166,7 +168,7 @@ public class FeatherSettingsScreen extends Screen {
             }
         }
 
-        return super.mouseClicked(mouseX, mouseY, button);
+        return super.mouseClicked(event, focused);
     }
 
     @Override
