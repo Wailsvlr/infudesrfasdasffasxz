@@ -78,11 +78,11 @@ func main() {
 
 	// controls
 	fmt.Println("[i] Kontroller:")
-	fmt.Println("    Shift + Sag Tik  →  Menu ac/kapat")
-	fmt.Println("    INSERT           →  ESP ac/kapat")
-	fmt.Println("    HOME             →  Kill uyarisi ac/kapat")
-	fmt.Println("    END              →  Minimap ac/kapat")
-	fmt.Println("    Shift + DELETE   →  Programi kapat")
+	fmt.Println("    F1  →  Menu ac/kapat")
+	fmt.Println("    F2  →  ESP ac/kapat")
+	fmt.Println("    F3  →  Kill uyarisi ac/kapat")
+	fmt.Println("    F4  →  Minimap ac/kapat")
+	fmt.Println("    F5  →  Programi kapat")
 	fmt.Println()
 	fmt.Println("[+] Overlay baslatiliyor...")
 

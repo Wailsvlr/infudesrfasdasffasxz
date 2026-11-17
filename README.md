@@ -56,11 +56,11 @@ Harici, okuma tabanli Among Us hilesi. Oyuna mudahale etmez, tespit edilemez.
 
 | Tus | Islev |
 |---|---|
-| Shift + Sag Tik | Menu ac/kapat |
-| INSERT | ESP ac/kapat |
-| HOME | Kill uyarisi ac/kapat |
-| END | Minimap ac/kapat |
-| Shift + DELETE | Programi kapat |
+| F1 | Menu ac/kapat |
+| F2 | ESP ac/kapat |
+| F3 | Kill uyarisi ac/kapat |
+| F4 | Minimap ac/kapat |
+| F5 | Programi kapat |
 
 ## Anti-Cheat Korumalari
 

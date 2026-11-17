@@ -9,54 +9,58 @@ import (
 	"unsafe"
 )
 
-// ── overlay ──────────────────────────────────────────────────────────────────
-
 type Overlay struct {
-	hwnd     syscall.Handle
-	game     *GameReader
-	cfg      *Config
+	hwnd    syscall.Handle
+	game    *GameReader
+	cfg     *Config
+	running bool
 
 	menuOpen bool
-	running  bool
 
-	// GDI resources
 	fontBig   syscall.Handle
 	fontSmall syscall.Handle
 	bgBrush   syscall.Handle
 
-	// game window tracking
-	gameHwnd  syscall.Handle
-	gameRect  RECT
-	clientW   int32
-	clientH   int32
+	gameHwnd syscall.Handle
+	gameRect RECT
+	clientW  int32
+	clientH  int32
 
-	// hotkey debounce
-	hotkeyHeld bool
-	insHeld    bool
+	// per-key debounce — true while held
+	held [256]bool
 }
 
 func NewOverlay(game *GameReader, cfg *Config) *Overlay {
 	return &Overlay{
-		game:    game,
-		cfg:     cfg,
+		game:     game,
+		cfg:      cfg,
 		menuOpen: true,
 		running:  true,
 	}
 }
 
-var overlayInstance *Overlay
+var gOverlay *Overlay
+
+// keyPressed returns true once per press (rising edge)
+func (o *Overlay) keyPressed(vk int) bool {
+	down := isKeyDown(vk)
+	if down && !o.held[vk] {
+		o.held[vk] = true
+		return true
+	}
+	if !down {
+		o.held[vk] = false
+	}
+	return false
+}
 
 func (o *Overlay) Run() {
 	runtime.LockOSThread()
-	overlayInstance = o
+	gOverlay = o
 
 	hInst, _, _ := pGetModuleHandleW.Call(0)
-
-	// random-ish class name — avoids detection by window class scanning
 	className := utf16Ptr("SysMonRender_7f3a")
-
 	cursor, _, _ := pLoadCursorW.Call(0, uintptr(IDC_ARROW))
-
 	o.bgBrush = syscall.Handle(createSolidBrush(COLOR_KEY_RGB))
 
 	wc := WNDCLASSEXW{
@@ -68,10 +72,8 @@ func (o *Overlay) Run() {
 		ClassName:  className,
 	}
 	wc.Size = uint32(unsafe.Sizeof(wc))
-
 	pRegisterClassExW.Call(uintptr(unsafe.Pointer(&wc)))
 
-	// full-screen overlay
 	screenW, _, _ := pGetSystemMetrics.Call(SM_CXSCREEN)
 	screenH, _, _ := pGetSystemMetrics.Call(SM_CYSCREEN)
 
@@ -85,18 +87,13 @@ func (o *Overlay) Run() {
 	)
 	o.hwnd = syscall.Handle(hwnd)
 
-	// color-key transparency — COLOR_KEY_RGB becomes see-through
 	pSetLayeredWindowAttributes.Call(hwnd, uintptr(COLOR_KEY_RGB), 0, LWA_COLORKEY)
 	pShowWindow.Call(hwnd, SW_SHOW)
+	pSetTimer.Call(hwnd, 1, 33, 0) // ~30 FPS
 
-	// 33ms timer ≈ 30 FPS redraw
-	pSetTimer.Call(hwnd, 1, 33, 0)
+	o.fontBig = createFont(18, FW_BOLD)
+	o.fontSmall = createFont(13, FW_NORMAL)
 
-	// GDI fonts
-	o.fontBig = createFont(16, FW_BOLD)
-	o.fontSmall = createFont(12, FW_NORMAL)
-
-	// game reader goroutine
 	go func() {
 		for o.running {
 			o.game.Update()
@@ -104,14 +101,11 @@ func (o *Overlay) Run() {
 		}
 	}()
 
-	// message pump
 	var msg MSG
-	for {
-		r, _, _ := pPeekMessageW.Call(
-			uintptr(unsafe.Pointer(&msg)), 0, 0, 0, PM_REMOVE,
-		)
+	for o.running {
+		r, _, _ := pPeekMessageW.Call(uintptr(unsafe.Pointer(&msg)), 0, 0, 0, PM_REMOVE)
 		if r != 0 {
-			if msg.Message == WM_CLOSE || msg.Message == 0x0012 { // WM_QUIT
+			if msg.Message == 0x0012 { // WM_QUIT
 				break
 			}
 			pTranslateMessage.Call(uintptr(unsafe.Pointer(&msg)))
@@ -120,7 +114,6 @@ func (o *Overlay) Run() {
 			time.Sleep(1 * time.Millisecond)
 		}
 	}
-
 	o.running = false
 	deleteObject(o.fontBig)
 	deleteObject(o.fontSmall)
@@ -128,13 +121,16 @@ func (o *Overlay) Run() {
 }
 
 func wndProc(hwnd, msg, wParam, lParam uintptr) uintptr {
-	o := overlayInstance
+	o := gOverlay
+	if o == nil {
+		r, _, _ := pDefWindowProcW.Call(hwnd, msg, wParam, lParam)
+		return r
+	}
 	switch msg {
 	case WM_TIMER:
 		o.handleInput()
 		o.trackGameWindow()
 		pInvalidateRect.Call(hwnd, 0, 1)
-
 	case WM_PAINT:
 		var ps PAINTSTRUCT
 		hdc, _, _ := pBeginPaint.Call(hwnd, uintptr(unsafe.Pointer(&ps)))
@@ -142,10 +138,9 @@ func wndProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 			o.paint(syscall.Handle(hdc))
 		}
 		pEndPaint.Call(hwnd, uintptr(unsafe.Pointer(&ps)))
-
 	case WM_DESTROY:
+		o.running = false
 		pPostQuitMessage.Call(0)
-
 	default:
 		r, _, _ := pDefWindowProcW.Call(hwnd, msg, wParam, lParam)
 		return r
@@ -153,53 +148,48 @@ func wndProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 	return 0
 }
 
-// ── input handling ───────────────────────────────────────────────────────────
+// ── input — F1-F5, all with rising-edge debounce ────────────────────────────
+
+const (
+	VK_F1 = 0x70
+	VK_F2 = 0x71
+	VK_F3 = 0x72
+	VK_F4 = 0x73
+	VK_F5 = 0x74
+)
 
 func (o *Overlay) handleInput() {
-	// Shift + Right Click → toggle menu
-	if isKeyDown(VK_SHIFT) && isKeyDown(VK_RBUTTON) {
-		if !o.hotkeyHeld {
-			o.menuOpen = !o.menuOpen
-			o.hotkeyHeld = true
-		}
-	} else {
-		o.hotkeyHeld = false
+	if o.keyPressed(VK_F1) {
+		o.menuOpen = !o.menuOpen
 	}
-
-	// Insert → toggle ESP
-	if isKeyDown(VK_INSERT) {
-		if !o.insHeld {
-			o.cfg.ESPEnabled = !o.cfg.ESPEnabled
-			o.insHeld = true
-		}
-	} else {
-		o.insHeld = false
+	if o.keyPressed(VK_F2) {
+		o.cfg.ESPEnabled = !o.cfg.ESPEnabled
 	}
-
-	// Home → toggle alerts
-	if isKeyDown(VK_HOME) {
+	if o.keyPressed(VK_F3) {
 		o.cfg.AlertsEnabled = !o.cfg.AlertsEnabled
 	}
-
-	// End → toggle minimap
-	if isKeyDown(VK_END) {
+	if o.keyPressed(VK_F4) {
 		o.cfg.MinimapEnabled = !o.cfg.MinimapEnabled
 	}
-
-	// Delete → quit
-	if isKeyDown(VK_DELETE) && isKeyDown(VK_SHIFT) {
+	if o.keyPressed(VK_F5) {
 		o.running = false
 		pPostQuitMessage.Call(0)
 	}
 }
 
-// ── game window tracking ─────────────────────────────────────────────────────
+// ── game window tracking ────────────────────────────────────────────────────
 
 func (o *Overlay) trackGameWindow() {
 	if o.gameHwnd == 0 {
 		o.gameHwnd = findWindowW(utf16Ptr("UnityWndClass"), utf16Ptr("Among Us"))
 	}
 	if o.gameHwnd == 0 {
+		// fallback: fullscreen
+		sw, _, _ := pGetSystemMetrics.Call(SM_CXSCREEN)
+		sh, _, _ := pGetSystemMetrics.Call(SM_CYSCREEN)
+		o.gameRect = RECT{Left: 0, Top: 0, Right: int32(sw), Bottom: int32(sh)}
+		o.clientW = int32(sw)
+		o.clientH = int32(sh)
 		return
 	}
 	o.gameRect = getWindowRect(o.gameHwnd)
@@ -208,14 +198,12 @@ func (o *Overlay) trackGameWindow() {
 	o.clientH = cr.Bottom
 }
 
-// ── rendering ────────────────────────────────────────────────────────────────
+// ── paint ───────────────────────────────────────────────────────────────────
 
 func (o *Overlay) paint(hdc syscall.Handle) {
-	// fill with transparent color
 	var rc RECT
 	pGetClientRect.Call(uintptr(o.hwnd), uintptr(unsafe.Pointer(&rc)))
 	pFillRect.Call(uintptr(hdc), uintptr(unsafe.Pointer(&rc)), uintptr(o.bgBrush))
-
 	pSetBkMode.Call(uintptr(hdc), BK_TRANSPARENT)
 
 	state := o.game.State()
@@ -225,40 +213,25 @@ func (o *Overlay) paint(hdc syscall.Handle) {
 	inGame := state.InGame
 	localX := state.LocalX
 	localY := state.LocalY
+	lastErr := state.LastError
+	errCount := state.ErrCount
 	state.mu.RUnlock()
 
-	if !inGame || o.gameHwnd == 0 {
-		pSelectObject.Call(uintptr(hdc), uintptr(o.fontBig))
-		setTextColor(hdc, rgb(255, 200, 50))
-		drawText(hdc, 20, 20, "[AUCheat] Among Us oyunda degil / baglanti bekleniyor...")
-		o.drawMenu(hdc)
-		return
-	}
-
-	// world-to-screen helper using game window coords
-	// Among Us camera: orthographic, orthoSize ≈ 3.0, centered on local player
-	orthoSize := float32(3.0)
-	aspect := float32(o.clientW) / float32(o.clientH)
-	if aspect == 0 {
-		aspect = 16.0 / 9.0
-	}
-
-	w2s := func(wx, wy float32) (int32, int32) {
-		// screen origin → game window top-left
-		sx := (wx - localX) / (orthoSize * aspect) * float32(o.clientW) / 2
-		sy := -(wy - localY) / orthoSize * float32(o.clientH) / 2
-
-		// add game window offset on screen
-		pt := POINT{X: o.gameRect.Left, Y: o.gameRect.Top}
-		// convert client center to screen
-		cx := float32(o.gameRect.Left) + float32(o.clientW)/2 + sx
-		cy := float32(o.gameRect.Top) + float32(o.clientH)/2 + sy
-		_ = pt
-		return int32(cx), int32(cy)
-	}
+	// ── status bar (always visible) ─────────────────────────────────────
+	o.drawStatusBar(hdc, inGame, len(players), errCount, lastErr)
 
 	// ── ESP ──────────────────────────────────────────────────────────────
-	if o.cfg.ESPEnabled {
+	if inGame && o.cfg.ESPEnabled && len(players) > 0 {
+		orthoSize := float32(3.0)
+		aspect := float32(o.clientW) / float32(o.clientH)
+		if aspect <= 0 {
+			aspect = 16.0 / 9.0
+		}
+		scale := float32(o.clientH) / (2.0 * orthoSize)
+
+		gcx := float32(o.gameRect.Left+o.gameRect.Right) / 2.0
+		gcy := float32(o.gameRect.Top+o.gameRect.Bottom) / 2.0
+
 		pSelectObject.Call(uintptr(hdc), uintptr(o.fontBig))
 
 		for _, p := range players {
@@ -266,22 +239,22 @@ func (o *Overlay) paint(hdc syscall.Handle) {
 				continue
 			}
 
-			sx, sy := w2s(p.WorldX, p.WorldY)
+			sx := int32(gcx + (p.WorldX-localX)*scale)
+			sy := int32(gcy - (p.WorldY-localY)*scale)
 
-			// off-screen check
-			if sx < o.gameRect.Left-50 || sx > o.gameRect.Right+50 ||
-				sy < o.gameRect.Top-50 || sy > o.gameRect.Bottom+50 {
+			if sx < o.gameRect.Left-80 || sx > o.gameRect.Right+80 ||
+				sy < o.gameRect.Top-40 || sy > o.gameRect.Bottom+40 {
 				continue
 			}
 
 			var col uint32
 			switch {
 			case p.IsDead:
-				col = rgb(120, 120, 120)
+				col = rgb(130, 130, 130)
 			case p.IsImpostor:
-				col = rgb(255, 40, 40)
+				col = rgb(255, 30, 30)
 			default:
-				col = rgb(40, 255, 100)
+				col = rgb(30, 255, 90)
 			}
 			setTextColor(hdc, col)
 
@@ -295,128 +268,160 @@ func (o *Overlay) paint(hdc syscall.Handle) {
 			}
 
 			label := fmt.Sprintf("%s [%s]%s", p.Name, tag, dead)
-			drawText(hdc, sx-40, sy-20, label)
+			drawText(hdc, sx-50, sy-22, label)
 
-			// distance
 			pSelectObject.Call(uintptr(hdc), uintptr(o.fontSmall))
-			dist := fmt.Sprintf("%.1fm", p.Distance)
-			drawText(hdc, sx-15, sy+2, dist)
+			drawText(hdc, sx-18, sy+2, fmt.Sprintf("%.1fm", p.Distance))
 			pSelectObject.Call(uintptr(hdc), uintptr(o.fontBig))
 		}
 	}
 
-	// ── kill range alert ─────────────────────────────────────────────────
-	if o.cfg.AlertsEnabled {
+	// ── kill range alert ────────────────────────────────────────────────
+	if inGame && o.cfg.AlertsEnabled {
 		for _, p := range players {
 			if p.IsImpostor && p.InKillRange && !p.IsDead {
 				setTextColor(hdc, rgb(255, 0, 0))
 				pSelectObject.Call(uintptr(hdc), uintptr(o.fontBig))
-
 				cx := (o.gameRect.Left + o.gameRect.Right) / 2
-				alertY := o.gameRect.Top + 30
-				drawText(hdc, cx-100, alertY, fmt.Sprintf("⚠ IMPOSTOR YAKININDA: %s (%.1fm)", p.Name, p.Distance))
+				drawText(hdc, cx-120, o.gameRect.Top+50, fmt.Sprintf("!! IMPOSTOR YAKININDA: %s (%.1fm) !!", p.Name, p.Distance))
 			}
 		}
 	}
 
-	// ── minimap ──────────────────────────────────────────────────────────
-	if o.cfg.MinimapEnabled {
-		mmX := o.gameRect.Right - 170
-		mmY := o.gameRect.Top + 10
-		mmW := int32(160)
-		mmH := int32(160)
-		mmScale := float32(8.0) // world units visible in minimap
-
-		// background
-		drawFilledRect(hdc, mmX, mmY, mmX+mmW, mmY+mmH, rgb(0, 0, 0))
-		drawRect(hdc, mmX, mmY, mmX+mmW, mmY+mmH, rgb(100, 100, 100))
-
-		pSelectObject.Call(uintptr(hdc), uintptr(o.fontSmall))
-
-		for _, p := range players {
-			if p.IsDisconnected || p.IsDead {
-				continue
-			}
-
-			dx := (p.WorldX - localX) / mmScale
-			dy := -(p.WorldY - localY) / mmScale
-
-			px := mmX + mmW/2 + int32(dx*float32(mmW)/2)
-			py := mmY + mmH/2 + int32(dy*float32(mmH)/2)
-
-			if px < mmX || px > mmX+mmW || py < mmY || py > mmY+mmH {
-				// clamp to edge
-				px = clampI32(px, mmX+2, mmX+mmW-2)
-				py = clampI32(py, mmY+2, mmY+mmH-2)
-			}
-
-			col := rgb(40, 255, 100)
-			if p.IsImpostor {
-				col = rgb(255, 40, 40)
-			}
-
-			drawFilledRect(hdc, px-3, py-3, px+3, py+3, col)
-		}
-
-		// local player (white dot center)
-		drawFilledRect(hdc, mmX+mmW/2-2, mmY+mmH/2-2, mmX+mmW/2+2, mmY+mmH/2+2, rgb(255, 255, 255))
-
-		setTextColor(hdc, rgb(200, 200, 200))
-		drawText(hdc, mmX+2, mmY+mmH+2, "MINIMAP")
+	// ── minimap ─────────────────────────────────────────────────────────
+	if inGame && o.cfg.MinimapEnabled && len(players) > 0 {
+		o.drawMinimap(hdc, players, localX, localY)
 	}
 
-	// ── menu (always last — on top) ──────────────────────────────────────
-	o.drawMenu(hdc)
+	// ── menu ────────────────────────────────────────────────────────────
+	if o.menuOpen {
+		o.drawMenu(hdc, inGame, len(players))
+	}
 }
 
-func (o *Overlay) drawMenu(hdc syscall.Handle) {
-	if !o.menuOpen {
-		return
-	}
+func (o *Overlay) drawStatusBar(hdc syscall.Handle, inGame bool, playerCount, errCount int, lastErr string) {
+	bx := o.gameRect.Left + 5
+	by := o.gameRect.Bottom - 22
+	bw := int32(300)
+	bh := int32(18)
 
+	drawFilledRect(hdc, bx, by, bx+bw, by+bh, rgb(5, 5, 10))
+	pSelectObject.Call(uintptr(hdc), uintptr(o.fontSmall))
+
+	if inGame {
+		setTextColor(hdc, rgb(80, 255, 120))
+		drawText(hdc, bx+4, by+1, fmt.Sprintf("AUCheat | Oyunda | %d oyuncu | F1=Menu", playerCount))
+	} else if errCount > 0 && lastErr != "" {
+		setTextColor(hdc, rgb(255, 100, 50))
+		short := lastErr
+		if len(short) > 40 {
+			short = short[:40]
+		}
+		drawText(hdc, bx+4, by+1, fmt.Sprintf("AUCheat | HATA: %s", short))
+	} else {
+		setTextColor(hdc, rgb(255, 200, 50))
+		drawText(hdc, bx+4, by+1, "AUCheat | Oyun bekleniyor... | F1=Menu")
+	}
+}
+
+func (o *Overlay) drawMenu(hdc syscall.Handle, inGame bool, playerCount int) {
 	mx := o.gameRect.Left + 10
 	my := o.gameRect.Top + 10
-	mw := int32(220)
-	mh := int32(170)
+	mw := int32(240)
+	mh := int32(210)
 
-	drawFilledRect(hdc, mx, my, mx+mw, my+mh, rgb(10, 10, 15))
-	drawRect(hdc, mx, my, mx+mw, my+mh, rgb(80, 80, 120))
+	drawFilledRect(hdc, mx, my, mx+mw, my+mh, rgb(10, 10, 20))
+	drawRect(hdc, mx, my, mx+mw, my+mh, rgb(80, 80, 140))
 
 	pSelectObject.Call(uintptr(hdc), uintptr(o.fontBig))
 	setTextColor(hdc, rgb(255, 200, 50))
-	drawText(hdc, mx+10, my+8, "AUCheat — PORTOLAN")
+	drawText(hdc, mx+10, my+8, "AUCheat")
 
 	pSelectObject.Call(uintptr(hdc), uintptr(o.fontSmall))
 	y := my + 32
 
+	// status
+	if inGame {
+		setTextColor(hdc, rgb(80, 255, 120))
+		drawText(hdc, mx+10, y, fmt.Sprintf("Durum: Oyunda (%d oyuncu)", playerCount))
+	} else {
+		setTextColor(hdc, rgb(255, 100, 50))
+		drawText(hdc, mx+10, y, "Durum: Offset bulunamadi / Oyun yok")
+	}
+	y += 22
+
 	onoff := func(b bool) string {
-		if b { return "ON" }
+		if b {
+			return "ON"
+		}
 		return "OFF"
 	}
 
-	lines := []struct{ key, label string; on bool }{
-		{"INS", "ESP (roller)", o.cfg.ESPEnabled},
-		{"HOME", "Kill Uyarisi", o.cfg.AlertsEnabled},
-		{"END", "Minimap", o.cfg.MinimapEnabled},
+	items := []struct {
+		key, label string
+		on         bool
+	}{
+		{"F2", "ESP (roller goster)", o.cfg.ESPEnabled},
+		{"F3", "Kill Uyarisi", o.cfg.AlertsEnabled},
+		{"F4", "Minimap", o.cfg.MinimapEnabled},
 	}
 
-	for _, l := range lines {
-		col := rgb(100, 100, 100)
+	for _, l := range items {
 		if l.on {
-			col = rgb(100, 255, 130)
+			setTextColor(hdc, rgb(100, 255, 130))
+		} else {
+			setTextColor(hdc, rgb(100, 100, 100))
 		}
-		setTextColor(hdc, col)
 		drawText(hdc, mx+10, y, fmt.Sprintf("[%s] %s: %s", l.key, l.label, onoff(l.on)))
 		y += 18
 	}
 
+	y += 6
 	setTextColor(hdc, rgb(180, 180, 180))
-	drawText(hdc, mx+10, y+8, "Shift+Sag Tik = Menu")
-	drawText(hdc, mx+10, y+24, "Shift+DEL    = Kapat")
-	drawText(hdc, mx+10, y+42, "* sadece okuma — ban riski yok *")
+	drawText(hdc, mx+10, y, "F1 = Menu goster/gizle")
+	y += 16
+	drawText(hdc, mx+10, y, "F5 = Kapat")
+	y += 20
+	setTextColor(hdc, rgb(100, 180, 100))
+	drawText(hdc, mx+10, y, "* sadece okuma — ban riski yok *")
 }
 
-// ── GDI helpers ──────────────────────────────────────────────────────────────
+func (o *Overlay) drawMinimap(hdc syscall.Handle, players []PlayerInfo, lx, ly float32) {
+	mmX := o.gameRect.Right - 170
+	mmY := o.gameRect.Top + 10
+	mmW := int32(160)
+	mmH := int32(160)
+	mmScale := float32(8.0)
+
+	drawFilledRect(hdc, mmX, mmY, mmX+mmW, mmY+mmH, rgb(5, 5, 10))
+	drawRect(hdc, mmX, mmY, mmX+mmW, mmY+mmH, rgb(80, 80, 120))
+
+	for _, p := range players {
+		if p.IsDisconnected || p.IsDead {
+			continue
+		}
+		dx := (p.WorldX - lx) / mmScale
+		dy := -(p.WorldY - ly) / mmScale
+		px := mmX + mmW/2 + int32(dx*float32(mmW)/2)
+		py := mmY + mmH/2 + int32(dy*float32(mmH)/2)
+		px = clampI32(px, mmX+2, mmX+mmW-2)
+		py = clampI32(py, mmY+2, mmY+mmH-2)
+
+		col := rgb(30, 255, 90)
+		if p.IsImpostor {
+			col = rgb(255, 30, 30)
+		}
+		drawFilledRect(hdc, px-3, py-3, px+3, py+3, col)
+	}
+
+	drawFilledRect(hdc, mmX+mmW/2-2, mmY+mmH/2-2, mmX+mmW/2+2, mmY+mmH/2+2, rgb(255, 255, 255))
+
+	pSelectObject.Call(uintptr(hdc), uintptr(o.fontSmall))
+	setTextColor(hdc, rgb(180, 180, 180))
+	drawText(hdc, mmX+2, mmY+mmH+2, "MINIMAP")
+}
+
+// ── GDI helpers ─────────────────────────────────────────────────────────────
 
 func createFont(size int32, weight int32) syscall.Handle {
 	h, _, _ := pCreateFontW.Call(
@@ -439,22 +444,23 @@ func setTextColor(hdc syscall.Handle, color uint32) {
 }
 
 func drawText(hdc syscall.Handle, x, y int32, text string) {
-	s := utf16Ptr(text)
-	n := 0
-	for p := s; *(*uint16)(unsafe.Pointer(uintptr(unsafe.Pointer(p)) + uintptr(n)*2)) != 0; n++ {}
-	pTextOutW.Call(uintptr(hdc), uintptr(x), uintptr(y), uintptr(unsafe.Pointer(s)), uintptr(n))
+	u16, _ := syscall.UTF16FromString(text)
+	if len(u16) > 1 {
+		pTextOutW.Call(uintptr(hdc), uintptr(x), uintptr(y),
+			uintptr(unsafe.Pointer(&u16[0])), uintptr(len(u16)-1))
+	}
 }
 
 func drawRect(hdc syscall.Handle, x1, y1, x2, y2 int32, color uint32) {
 	pen, _, _ := pCreatePen.Call(PS_SOLID, 1, uintptr(color))
-	nullBrush := createSolidBrush(COLOR_KEY_RGB)
+	nb := createSolidBrush(COLOR_KEY_RGB)
 	old, _, _ := pSelectObject.Call(uintptr(hdc), pen)
-	oldBr, _, _ := pSelectObject.Call(uintptr(hdc), nullBrush)
+	oldBr, _, _ := pSelectObject.Call(uintptr(hdc), nb)
 	pRectangleW.Call(uintptr(hdc), uintptr(x1), uintptr(y1), uintptr(x2), uintptr(y2))
 	pSelectObject.Call(uintptr(hdc), old)
 	pSelectObject.Call(uintptr(hdc), oldBr)
 	deleteObject(syscall.Handle(pen))
-	deleteObject(syscall.Handle(nullBrush))
+	deleteObject(syscall.Handle(nb))
 }
 
 func drawFilledRect(hdc syscall.Handle, x1, y1, x2, y2 int32, color uint32) {
@@ -469,10 +475,13 @@ func deleteObject(h syscall.Handle) {
 }
 
 func clampI32(v, lo, hi int32) int32 {
-	if v < lo { return lo }
-	if v > hi { return hi }
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
 	return v
 }
 
-// suppress unused import
 var _ = math.Pi

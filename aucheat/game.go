@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"math"
 	"sync"
 )
@@ -23,12 +24,13 @@ type PlayerInfo struct {
 }
 
 type GameState struct {
-	mu       sync.RWMutex
-	Players  []PlayerInfo
-	LocalX   float32
-	LocalY   float32
-	InGame   bool
-	ErrCount int
+	mu        sync.RWMutex
+	Players   []PlayerInfo
+	LocalX    float32
+	LocalY    float32
+	InGame    bool
+	ErrCount  int
+	LastError string
 }
 
 // ── game reader ──────────────────────────────────────────────────────────────
@@ -56,6 +58,7 @@ func (g *GameReader) Update() {
 
 	players, err := g.readPlayers()
 	if err != nil {
+		g.state.LastError = err.Error()
 		g.state.ErrCount++
 		if g.state.ErrCount > 10 {
 			g.state.InGame = false
@@ -64,6 +67,7 @@ func (g *GameReader) Update() {
 		return
 	}
 
+	g.state.LastError = ""
 	g.state.ErrCount = 0
 	g.state.Players = players
 	g.state.InGame = len(players) > 0
@@ -72,34 +76,41 @@ func (g *GameReader) Update() {
 func (g *GameReader) readPlayers() ([]PlayerInfo, error) {
 	f := &g.cfg.Fields
 
+	if g.cfg.Statics.AmongUsClient == 0 {
+		return nil, fmt.Errorf("AmongUsClient offset=0")
+	}
+	if g.cfg.Statics.GameData == 0 {
+		return nil, fmt.Errorf("GameData offset=0")
+	}
+
 	// AmongUsClient.Instance → check if in game
 	aucPtr, err := g.proc.ReadPtr(g.cfg.Statics.AmongUsClient)
 	if err != nil || aucPtr == 0 {
-		return nil, err
+		return nil, fmt.Errorf("AUClient ptr okuma: %v (addr=0x%X)", err, g.cfg.Statics.AmongUsClient)
 	}
 
 	// GameData.Instance
 	gdPtr, err := g.proc.ReadPtr(g.cfg.Statics.GameData)
 	if err != nil || gdPtr == 0 {
-		return nil, err
+		return nil, fmt.Errorf("GameData ptr okuma: %v (addr=0x%X)", err, g.cfg.Statics.GameData)
 	}
 
 	// GameData.AllPlayers (Il2CppList<PlayerInfo>)
 	listPtr, err := g.proc.ReadPtr(gdPtr + f.GD_AllPlayers)
 	if err != nil || listPtr == 0 {
-		return nil, err
+		return nil, fmt.Errorf("AllPlayers list: %v (gd=0x%X +0x%X)", err, gdPtr, f.GD_AllPlayers)
 	}
 
 	// list count
 	count, err := g.proc.ReadI32(listPtr + f.List_Size)
 	if err != nil || count <= 0 || count > 15 {
-		return nil, err
+		return nil, fmt.Errorf("list count=%d err=%v", count, err)
 	}
 
 	// items array
 	arrPtr, err := g.proc.ReadPtr(listPtr + f.List_Items)
 	if err != nil || arrPtr == 0 {
-		return nil, err
+		return nil, fmt.Errorf("items array: %v", err)
 	}
 
 	var players []PlayerInfo
