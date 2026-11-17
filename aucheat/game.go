@@ -12,6 +12,10 @@ type PlayerInfo struct {
 	Name           string
 	PlayerId       byte
 	ColorId        int32
+	RoleRaw        uint32
+	RoleKnown      bool // false when the role field could not be read
+	RoleName       string
+	Team           Team
 	IsImpostor     bool
 	IsDead         bool
 	IsDisconnected bool
@@ -181,11 +185,24 @@ func (g *GameReader) readPlayerInfo(addr uintptr) (PlayerInfo, bool) {
 
 	pi.ColorId, _ = g.proc.ReadI32(addr + f.PI_ColorId)
 
-	role, _ := g.proc.ReadU32(addr + f.PI_RoleType)
-	pi.IsImpostor = (role == 1 || role == 3) // Impostor=1, Shapeshifter=3
+	role, err := g.proc.ReadU32(addr + f.PI_RoleType)
+	if err != nil {
+		pi.RoleName = "?"
+	} else {
+		def := g.cfg.Roles.Lookup(role)
+		pi.RoleRaw = role
+		pi.RoleKnown = true
+		pi.RoleName = def.Name
+		pi.Team = def.Team
+		pi.IsImpostor = def.Team == TeamImpostor
+	}
 
-	pi.IsDead, _ = g.proc.ReadBool(addr + f.PI_IsDead)
-	pi.IsDisconnected, _ = g.proc.ReadBool(addr + f.PI_Disconnected)
+	if pi.IsDead, err = g.proc.ReadBool(addr + f.PI_IsDead); err != nil {
+		return pi, false
+	}
+	if pi.IsDisconnected, err = g.proc.ReadBool(addr + f.PI_Disconnected); err != nil {
+		return pi, false
+	}
 
 	return pi, true
 }

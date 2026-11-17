@@ -156,6 +156,7 @@ const (
 	VK_F3 = 0x72
 	VK_F4 = 0x73
 	VK_F5 = 0x74
+	VK_F6 = 0x75
 )
 
 func (o *Overlay) handleInput() {
@@ -170,6 +171,9 @@ func (o *Overlay) handleInput() {
 	}
 	if o.keyPressed(VK_F4) {
 		o.cfg.MinimapEnabled = !o.cfg.MinimapEnabled
+	}
+	if o.keyPressed(VK_F6) {
+		o.cfg.RoleListEnabled = !o.cfg.RoleListEnabled
 	}
 	if o.keyPressed(VK_F5) {
 		o.running = false
@@ -247,27 +251,14 @@ func (o *Overlay) paint(hdc syscall.Handle) {
 				continue
 			}
 
-			var col uint32
-			switch {
-			case p.IsDead:
-				col = rgb(130, 130, 130)
-			case p.IsImpostor:
-				col = rgb(255, 30, 30)
-			default:
-				col = rgb(30, 255, 90)
-			}
-			setTextColor(hdc, col)
+			setTextColor(hdc, roleColor(p))
 
-			tag := "CREW"
-			if p.IsImpostor {
-				tag = "IMP"
-			}
 			dead := ""
 			if p.IsDead {
 				dead = " X"
 			}
 
-			label := fmt.Sprintf("%s [%s]%s", p.Name, tag, dead)
+			label := fmt.Sprintf("%s [%s]%s", p.Name, p.RoleName, dead)
 			drawText(hdc, sx-50, sy-22, label)
 
 			pSelectObject.Call(uintptr(hdc), uintptr(o.fontSmall))
@@ -291,6 +282,11 @@ func (o *Overlay) paint(hdc syscall.Handle) {
 	// ── minimap ─────────────────────────────────────────────────────────
 	if inGame && o.cfg.MinimapEnabled && len(players) > 0 {
 		o.drawMinimap(hdc, players, localX, localY)
+	}
+
+	// ── role list (independent of world positions) ──────────────────────
+	if inGame && o.cfg.RoleListEnabled && len(players) > 0 {
+		o.drawRoleList(hdc, players)
 	}
 
 	// ── menu ────────────────────────────────────────────────────────────
@@ -328,7 +324,7 @@ func (o *Overlay) drawMenu(hdc syscall.Handle, inGame bool, playerCount int) {
 	mx := o.gameRect.Left + 10
 	my := o.gameRect.Top + 10
 	mw := int32(240)
-	mh := int32(210)
+	mh := int32(228)
 
 	drawFilledRect(hdc, mx, my, mx+mw, my+mh, rgb(10, 10, 20))
 	drawRect(hdc, mx, my, mx+mw, my+mh, rgb(80, 80, 140))
@@ -364,6 +360,7 @@ func (o *Overlay) drawMenu(hdc syscall.Handle, inGame bool, playerCount int) {
 		{"F2", "ESP (roller goster)", o.cfg.ESPEnabled},
 		{"F3", "Kill Uyarisi", o.cfg.AlertsEnabled},
 		{"F4", "Minimap", o.cfg.MinimapEnabled},
+		{"F6", "Rol listesi", o.cfg.RoleListEnabled},
 	}
 
 	for _, l := range items {
@@ -384,6 +381,61 @@ func (o *Overlay) drawMenu(hdc syscall.Handle, inGame bool, playerCount int) {
 	y += 20
 	setTextColor(hdc, rgb(100, 180, 100))
 	drawText(hdc, mx+10, y, "* sadece okuma — ban riski yok *")
+}
+
+func roleColor(p PlayerInfo) uint32 {
+	switch {
+	case p.IsDead:
+		return rgb(130, 130, 130)
+	case !p.RoleKnown || p.Team == TeamUnknown:
+		return rgb(255, 210, 40)
+	case p.Team == TeamImpostor:
+		return rgb(255, 30, 30)
+	default:
+		return rgb(30, 255, 90)
+	}
+}
+
+// drawRoleList prints every connected player's role with the raw enum value in
+// parentheses, so the role table can be checked against a dump at a glance.
+func (o *Overlay) drawRoleList(hdc syscall.Handle, players []PlayerInfo) {
+	const rowH = int32(16)
+	pw := int32(250)
+	px := o.gameRect.Right - pw - 10
+	py := o.gameRect.Top + 196
+
+	rows := 0
+	for _, p := range players {
+		if !p.IsDisconnected {
+			rows++
+		}
+	}
+	ph := int32(rows)*rowH + 26
+
+	drawFilledRect(hdc, px, py, px+pw, py+ph, rgb(5, 5, 10))
+	drawRect(hdc, px, py, px+pw, py+ph, rgb(80, 80, 120))
+
+	pSelectObject.Call(uintptr(hdc), uintptr(o.fontSmall))
+	setTextColor(hdc, rgb(180, 180, 180))
+	drawText(hdc, px+6, py+4, "ROLLER")
+
+	y := py + 22
+	for _, p := range players {
+		if p.IsDisconnected {
+			continue
+		}
+		setTextColor(hdc, roleColor(p))
+		raw := "?"
+		if p.RoleKnown {
+			raw = fmt.Sprintf("%d", p.RoleRaw)
+		}
+		dead := ""
+		if p.IsDead {
+			dead = " X"
+		}
+		drawText(hdc, px+6, y, fmt.Sprintf("%-12.12s %s (%s)%s", p.Name, p.RoleName, raw, dead))
+		y += rowH
+	}
 }
 
 func (o *Overlay) drawMinimap(hdc syscall.Handle, players []PlayerInfo, lx, ly float32) {

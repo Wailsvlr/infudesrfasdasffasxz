@@ -40,15 +40,23 @@ type Config struct {
 	Fields  FieldOffsets
 	Scanned bool
 
+	Roles RoleTable
+
 	// overlay settings
 	ESPEnabled      bool
 	AlertsEnabled   bool
 	MinimapEnabled  bool
+	RoleListEnabled bool
 	UpdateRateMs    int
 }
 
+// Field offset provenance: the defaults below predate this change and were not
+// derived from a dump supplied in this session — treat them as unverified until
+// checked against Il2CppDumper output for the installed build.
 func DefaultConfig() *Config {
 	return &Config{
+		Roles:           DefaultRoleTable(),
+		RoleListEnabled: true,
 		Fields: FieldOffsets{
 			GD_AllPlayers:    0x44,
 			List_Size:        0x18,
@@ -79,11 +87,17 @@ func (c *Config) NeedsScan() bool {
 
 // ── JSON persistence ─────────────────────────────────────────────────────────
 
+type roleJSON struct {
+	Name string `json:"name"`
+	Team string `json:"team"` // crew | impostor | unknown
+}
+
 type cfgJSON struct {
-	Version          string            `json:"version"`
-	Note             string            `json:"note"`
-	Statics          map[string]string `json:"statics"`
-	Fields           map[string]string `json:"fields"`
+	Version          string              `json:"version"`
+	Note             string              `json:"note"`
+	Statics          map[string]string   `json:"statics"`
+	Fields           map[string]string   `json:"fields"`
+	Roles            map[string]roleJSON `json:"roles"`
 	ESPEnabled       bool              `json:"esp_enabled"`
 	AlertsEnabled    bool              `json:"alerts_enabled"`
 	MinimapEnabled   bool              `json:"minimap_enabled"`
@@ -142,6 +156,14 @@ func LoadConfig() *Config {
 		}
 	}
 
+	for k, r := range j.Roles {
+		raw, err := strconv.ParseUint(k, 10, 32)
+		if err != nil || r.Name == "" {
+			continue
+		}
+		cfg.Roles[uint32(raw)] = RoleDef{Name: r.Name, Team: parseTeam(r.Team)}
+	}
+
 	cfg.ESPEnabled = j.ESPEnabled
 	cfg.AlertsEnabled = j.AlertsEnabled
 	cfg.MinimapEnabled = j.MinimapEnabled
@@ -174,9 +196,13 @@ func (c *Config) Save() error {
 			"List.Items":                 hexStr(c.Fields.List_Items),
 			"Array.FirstElement":         hexStr(c.Fields.Array_FirstElement),
 		},
+		Roles:          map[string]roleJSON{},
 		ESPEnabled:     c.ESPEnabled,
 		AlertsEnabled:  c.AlertsEnabled,
 		MinimapEnabled: c.MinimapEnabled,
+	}
+	for raw, d := range c.Roles {
+		j.Roles[strconv.FormatUint(uint64(raw), 10)] = roleJSON{Name: d.Name, Team: teamString(d.Team)}
 	}
 
 	data, err := json.MarshalIndent(j, "", "  ")
