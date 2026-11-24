@@ -82,7 +82,23 @@ struct LoadResult {
   std::vector<std::string> warnings;
 };
 
-LoadResult LoadSettings(std::string_view iniText);
+// `autoIniText` (Jiggle.auto.ini, written by the probe) only fills [Build] and [Skeleton] values
+// that Jiggle.ini leaves blank.
+LoadResult LoadSettings(std::string_view iniText, std::string_view autoIniText = {});
+
+struct AutoLayout {
+  std::vector<uint32_t> chain;
+  uint32_t bone0TranslationOffset{0};
+  uint32_t matrixStride{0};
+  uint32_t maxBoneIndex{0};
+  uint32_t imageSize{0};
+  uint32_t timeDateStamp{0};
+  std::string layoutProvenance;
+  std::string buildProvenance;
+};
+
+// Text of Jiggle.auto.ini. ';' and '#' are stripped from provenance text (they start INI comments).
+std::string FormatAutoConfig(const AutoLayout& layout);
 
 // ---------------------------------------------------------------------------
 // Gate: decides whether the memory-writing feature may run at all.

@@ -8,7 +8,7 @@ Secondary-motion (spring) physics for chosen ped bones. Single-player, Script Ho
 |---|---|
 | Spring solver, shaping, config parser, gate, layout probe, skeleton access | Built and run here with g++ 13 on Linux, ASan + UBSan on: `2113 checks, 0 failures` |
 | `Plugin.cpp`, `Win32Support.cpp` | Compiled and linked here with mingw-w64 against **stub** Script Hook V headers I wrote. Not built with MSVC, not built against the real SDK, never run in the game. |
-| Skeleton memory layout (`Chain`, `Bone0TranslationOffset`, `MatrixStride`, `MaxBoneIndex`) | **Unknown.** No value is shipped. The feature is gated until you capture them with the probe. |
+| Skeleton memory layout (`Chain`, `Bone0TranslationOffset`, `MatrixStride`, `MaxBoneIndex`) | **Unknown.** No value is shipped. The feature is gated until the in-game probe (F7) captures them into `Jiggle.auto.ini`. |
 | Executable fingerprint (`ExpectedImageSize`, `ExpectedTimeDateStamp`) | **Unknown.** Gated until you copy them from `Jiggle.log`. |
 
 ## Layout
@@ -42,17 +42,19 @@ If your SDK zip uses another layout, pass `-DSHV_INC_DIR=...` and `-DSHV_LIB_FIL
 
 Logic tests only, any compiler: `cmake -S gtav-jiggle -B b && cmake --build b && ctest --test-dir b`.
 
-## First run (what unblocks the feature)
+## First run (automatic setup)
 
-1. In `Jiggle.ini` `[Probe] Bones=` put two to six bone names that exist on the player ped model (read them off the model's skeleton in CodeWalker). Pick bones at least about 0.1 m apart.
-2. Start single-player, stand still and upright, press **F7**. Read `Jiggle.log` (next to the `.asi`).
-3. The `main module:` line gives `SizeOfImage` and `TimeDateStamp`. Put them in `[Build]` and say in `Provenance=` where they came from.
-4. A `probe: hit N` line gives `chain`, `Bone0TranslationOffset` and `stride`. Copy them into `[Skeleton]` as `Chain`, `Bone0TranslationOffset`, `MatrixStride`. Set `MaxBoneIndex` to the highest bone index of the ped skeleton.
-   Each hit prints, per probe bone, the memory delta next to the natives delta. They must agree.
-5. Add the bones to jiggle as `[Bone.Something]` sections with `Name=`. Use leaf bones: only the bone's own matrix is written, children do not follow.
-6. **F8** reloads the INI. Hold **F9**: every configured bone on the player should jump up by `NudgeMeters`. If nothing moves, the hit was a stale copy; try the next hit. If it moves, **F6** toggles the physics.
+1. Put `Jiggle.asi` and `Jiggle.ini` next to the game executable (Script Hook V installed). Start single-player.
+2. Play as a ped that has the bones you want to move (see "Which ped").
+3. Stand still and upright, press **F7**. The plugin finds the bone-matrix array in memory using the game's own bone natives, writes `Jiggle.auto.ini` (build fingerprint and layout, values from the running game), reloads, and for about 2.5 seconds pushes every configured bone up by `NudgeMeters` as a visible test.
+4. If the bones jumped, the setup is right: **F6** toggles the physics. If nothing moved, press **F7** again to try the next hit; the log lists them all.
+5. `Jiggle.log` lists every step. Values you type into `Jiggle.ini` always win over `Jiggle.auto.ini`. Delete `Jiggle.auto.ini` to start over. If the game executable changes (update), the fingerprint no longer matches, the feature closes by itself, and F7 sets it up again.
 
-Feedback is `Jiggle.log` plus system beeps: a plain beep means on / ok, the asterisk sound means off, the hand sound means gated or failed (reasons are in the log).
+Hotkeys: F6 toggle, F7 probe and setup, F8 reload the INI, F9 hold for the nudge test.
+
+## Which ped
+
+The default story characters have no breast bones. The female upper-body models in the pack that prompted this project skin about 1000-1600 vertices each to skeleton bone indices 125 and 126, mirrored at chest height; names for those bones are not stored in the files. `Jiggle.ini` therefore ships `SPR_L_Breast` and `SPR_R_Breast` as **unverified candidate names**; after the first F7, `Jiggle.log` prints `jiggle bone '<name>' -> index N`. If the indices are 125 and 126 the names are right. If a name says "not on this ped model", change it in `Jiggle.ini`. If the game's own skeleton already springs those bones, this plugin only adds a small extra offset on top.
 
 ## If the probe finds nothing
 

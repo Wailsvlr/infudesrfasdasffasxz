@@ -182,10 +182,50 @@ void TestShippedIniHasNoGameValues() {
   CHECK(!r.settings.layout.bone0TranslationOffset.has_value());
   CHECK(!r.settings.layout.matrixStride.has_value());
   CHECK(!r.settings.layout.maxBoneIndex.has_value());
-  CHECK(r.settings.bones.empty());
+  CHECK(r.settings.bones.size() == 2);  // two unverified candidate names, no game values
+  CHECK(r.settings.bones[0].boneName == "SPR_L_Breast" && r.settings.bones[1].boneName == "SPR_R_Breast");
   CHECK(r.settings.probe.boneNames.empty());
-  CHECK(!EvaluateGate(r.settings, {0x1234, 0x5678}).open);
+  CHECK(!EvaluateGate(r.settings, {0x1234, 0x5678}).open);  // layout and fingerprint still unset
 #endif
+}
+
+void TestAutoConfig() {
+  AutoLayout layout;
+  layout.chain = {0x40, 0x10};
+  layout.bone0TranslationOffset = 0x2A4;
+  layout.matrixStride = 48;
+  layout.maxBoneIndex = 127;
+  layout.imageSize = 0x0123ABCD;
+  layout.timeDateStamp = 0x65432100;
+  layout.layoutProvenance = "auto: probe hit 1 of 3; note # with ; comment chars";
+  layout.buildProvenance = "auto: runtime";
+  const std::string autoText = FormatAutoConfig(layout);
+
+  const std::string main =
+      "[Build]\nExpectedImageSize=\nProvenance=mine\n"
+      "[Skeleton]\nMatrixStride=64\n"
+      "[Bone.A]\nName=Foo\n";
+  const LoadResult r = LoadSettings(main, autoText);
+  CHECK(r.settings.layout.Complete());
+  CHECK(r.settings.layout.chain.value() == (std::vector<uint32_t>{0x40, 0x10}));
+  CHECK(r.settings.layout.bone0TranslationOffset.value() == 0x2A4);
+  CHECK(r.settings.layout.matrixStride.value() == 64);       // value in Jiggle.ini wins over the auto file
+  CHECK(r.settings.layout.maxBoneIndex.value() == 127);
+  CHECK(r.settings.build.imageSize.value() == 0x0123ABCD);   // blank in Jiggle.ini, filled by the auto file
+  CHECK(r.settings.build.timeDateStamp.value() == 0x65432100);
+  CHECK(r.settings.build.provenance == "mine");
+  CHECK(EvaluateGate(r.settings, {0x0123ABCD, 0x65432100}).open);
+  CHECK(!EvaluateGate(r.settings, {0x0123ABCE, 0x65432100}).open);  // different build: closed again
+
+  // No dereference chain round-trips as "none", not as an unset value.
+  layout.chain.clear();
+  const LoadResult none = LoadSettings("", FormatAutoConfig(layout));
+  CHECK(none.settings.layout.chain.has_value() && none.settings.layout.chain->empty());
+
+  // Auto text never touches other sections.
+  const LoadResult other = LoadSettings("[Physics]\nGain=3\n", "[Physics]\nGain=9\n[Skeleton]\nMaxBoneIndex=5\n");
+  CHECK(Near(other.settings.bones.empty() ? 0.f : 1.f, 0.f));
+  CHECK(other.settings.layout.maxBoneIndex.value() == 5);
 }
 
 void TestFrame() {
@@ -458,6 +498,7 @@ int main() {
   TestIni();
   TestSettings();
   TestShippedIniHasNoGameValues();
+  TestAutoConfig();
   TestFrame();
   TestSpring();
   TestShape();

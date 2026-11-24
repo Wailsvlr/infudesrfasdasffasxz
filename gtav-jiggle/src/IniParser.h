@@ -29,6 +29,10 @@ std::optional<long long> ParseInteger(std::string_view text);
 std::optional<double> ParseFloat(std::string_view text);  // finite values only
 std::optional<bool> ParseBool(std::string_view text);     // 0/1/true/false/yes/no/on/off
 
+// Copies keys of the listed sections from `fallback` into `base` where base has no value (missing or empty).
+IniDocument MergeUnset(IniDocument base, const IniDocument& fallback,
+                       const std::vector<std::string>& lowerSections);
+
 std::vector<std::string> SplitList(std::string_view text, char separator);
 std::string ToLower(std::string_view text);
 std::string_view Trim(std::string_view text);

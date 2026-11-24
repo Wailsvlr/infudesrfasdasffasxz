@@ -38,6 +38,10 @@ constexpr size_t kMaxModelCache = 512;
 constexpr size_t kMaxLoggedHits = 16;
 constexpr const char* kIniName = "Jiggle.ini";
 constexpr const char* kLogName = "Jiggle.log";
+constexpr const char* kAutoIniName = "Jiggle.auto.ini";
+// Highest skeleton bone index the automatic setup allows. Source: the skin bone-id arrays in the
+// female upper/lower body drawables supplied for this project cover indices 0..127.
+constexpr uint32_t kAutoMaxBoneIndex = 127;
 
 Vec3 ToVec3(const Vector3& v) { return {v.x, v.y, v.z}; }
 
@@ -101,7 +105,9 @@ class Plugin {
 
     const auto text = win::ReadTextFile(directory_ / kIniName);
     if (!text) log_.Linef("%s not found next to the .asi; defaults only, feature stays gated", kIniName);
-    LoadResult loaded = LoadSettings(text.value_or(std::string()));
+    const auto autoText = win::ReadTextFile(directory_ / kAutoIniName);
+    if (autoText) log_.Linef("%s found: layout values from an earlier probe fill the blanks", kAutoIniName);
+    LoadResult loaded = LoadSettings(text.value_or(std::string()), autoText.value_or(std::string()));
     for (const std::string& warning : loaded.warnings) log_.Linef("config: %s", warning.c_str());
     settings_ = std::move(loaded.settings);
 
@@ -167,6 +173,7 @@ class Plugin {
     const bool probe = Edge(keys.probe, focused, wasDown_[1]);
     const bool reload = Edge(keys.reload, focused, wasDown_[2]);
     nudgeHeld_ = focused && IsDown(keys.nudge);
+    nudgeActive_ = nudgeHeld_ || GetTickCount64() < selfTestUntilMs_;
 
     if (reload) {
       LoadConfiguration();
@@ -305,7 +312,7 @@ class Plugin {
     if (ours) anchor = anchor - LocalToWorld(frame, bone.applied.lastOffset);
 
     Vec3 offset;
-    if (nudgeHeld_) {
+    if (nudgeActive_) {
       offset = {0.f, 0.f, settings_.nudgeMeters};
     } else {
       const Vec3 lag = AdvanceSpring(bone.spring, config.spring, anchor, dt);
@@ -365,12 +372,19 @@ class Plugin {
     MessageBeep(MB_ICONHAND);
   }
 
+  // Tried when [Probe] Bones is empty. Written from memory of the game's skeleton and not verified:
+  // names the model does not have are skipped, and the log says which ones were found.
+  static constexpr std::array<const char*, 6> kFallbackProbeBones = {
+      "SKEL_Head", "SKEL_Spine3", "SKEL_L_Hand", "SKEL_R_Hand", "SKEL_L_Foot", "SKEL_R_Foot"};
+
   void RunProbe() {
-    const std::vector<std::string>& names = settings_.probe.boneNames;
-    if (names.size() < 2) {
-      ProbeFailed("set [Probe] Bones= to at least two bone names that exist on the player ped model");
-      return;
+    std::vector<std::string> names = settings_.probe.boneNames;
+    const bool fallback = names.size() < 2;
+    if (fallback) {
+      names.clear();
+      for (const char* candidate : kFallbackProbeBones) names.emplace_back(candidate);
     }
+
     const Ped player = PLAYER::PLAYER_PED_ID();
     if (!ENTITY::DOES_ENTITY_EXIST(player)) return ProbeFailed("no player ped");
     const uintptr_t base = BaseAddressOf(player);
@@ -383,12 +397,22 @@ class Plugin {
     log_.Linef("probe: ped=%u base=0x%llX model=0x%X forward=(%.3f, %.3f, %.3f)", static_cast<unsigned>(player), U64(base),
                static_cast<uint32_t>(ENTITY::GET_ENTITY_MODEL(player)), forward.x, forward.y, forward.z);
 
+    for (const BoneSettings& jiggleBone : settings_.bones) {
+      std::string lookup = jiggleBone.boneName;
+      const int index = ENTITY::GET_ENTITY_BONE_INDEX_BY_NAME(player, lookup.data());
+      log_.Linef("probe: jiggle bone '%s' -> index %d%s", jiggleBone.boneName.c_str(), index,
+                 index < 0 ? " (not on this ped model)" : "");
+    }
+
     std::vector<ProbeBone> bones;
+    std::vector<std::string> usedNames;
     for (const std::string& name : names) {
       std::string mutableName = name;
       const int index = ENTITY::GET_ENTITY_BONE_INDEX_BY_NAME(player, mutableName.data());
       if (index < 0) {
-        log_.Linef("probe: bone '%s' does not exist on the player ped model", name.c_str());
+        log_.Linef("probe: bone '%s' does not exist on the player ped model%s", name.c_str(),
+                   fallback ? " (skipped)" : "");
+        if (fallback) continue;
         return ProbeFailed("fix [Probe] Bones=");
       }
       const Vec3 world = ToVec3(ENTITY::GET_WORLD_POSITION_OF_ENTITY_BONE(player, index));
@@ -397,6 +421,10 @@ class Plugin {
       log_.Linef("probe: bone '%s' index=%d world=(%.4f, %.4f, %.4f) local=(%.4f, %.4f, %.4f)",
                  name.c_str(), index, world.x, world.y, world.z, local.x, local.y, local.z);
       bones.push_back(ProbeBone{static_cast<int32_t>(index), local});
+      usedNames.push_back(name);
+    }
+    if (bones.size() < 2) {
+      return ProbeFailed("fewer than two probe bones exist on this ped model; set [Probe] Bones= to bones from its skeleton");
     }
 
     ProbeOptions options;
@@ -436,17 +464,61 @@ class Plugin {
         const Vec3 seen = hit.observed[j] - hit.observed[0];
         const Vec3 want = bones[j].expected - bones[0].expected;
         log_.Linef("probe:   bone '%s' memory delta=(%.4f, %.4f, %.4f)  natives delta=(%.4f, %.4f, %.4f)",
-                   names[j].c_str(), seen.x, seen.y, seen.z, want.x, want.y, want.z);
+                   usedNames[j].c_str(), seen.x, seen.y, seen.z, want.x, want.y, want.z);
       }
     }
 
     if (report.hits.empty()) {
       log_.Line("probe: no match. See README 'If the probe finds nothing'.");
       MessageBeep(MB_ICONHAND);
-    } else {
-      log_.Line("probe: copy a hit into [Skeleton] (Chain, Bone0TranslationOffset, MatrixStride) and set MaxBoneIndex");
-      MessageBeep(MB_OK);
+      return;
     }
+    if (options.mode != MatchMode::Components) {
+      log_.Line("probe: hits found only by distance matching (axes unclear); not applied automatically");
+      MessageBeep(MB_ICONHAND);
+      return;
+    }
+    ApplyProbeHit(report, bones[0], usedNames);
+  }
+
+  // Saves one hit into Jiggle.auto.ini, reloads, and runs a short visible write test.
+  // Pressing the probe key again moves on to the next hit.
+  void ApplyProbeHit(const ProbeReport& report, const ProbeBone& firstBone,
+                     const std::vector<std::string>& usedNames) {
+    if (!mainModule_) return ProbeFailed("main module fingerprint unavailable, cannot save the layout");
+    const size_t attempt = probeAttempt_++ % report.hits.size();
+    const ProbeHit& hit = report.hits[attempt];
+    const std::optional<uint32_t> zero = LayoutOffsetForBoneZero(hit, firstBone.boneIndex);
+    if (!zero) return ProbeFailed("this hit cannot be expressed as a layout; press the probe key again for the next hit");
+
+    AutoLayout layout;
+    layout.chain = hit.chain;
+    layout.bone0TranslationOffset = *zero;
+    layout.matrixStride = hit.stride;
+    layout.maxBoneIndex = kAutoMaxBoneIndex;
+    layout.imageSize = mainModule_->fingerprint.imageSize;
+    layout.timeDateStamp = mainModule_->fingerprint.timeDateStamp;
+    layout.buildProvenance = "auto: read from the running main module by Jiggle.asi";
+    std::string bonesUsed;
+    for (const std::string& name : usedNames) bonesUsed += (bonesUsed.empty() ? "" : " ") + name;
+    char note[512];
+    std::snprintf(note, sizeof(note),
+                  "auto: probe hit %zu of %zu using bones %s; MaxBoneIndex is the 0-127 skin bone range seen in the female ydd files supplied for this project",
+                  attempt + 1, report.hits.size(), bonesUsed.c_str());
+    layout.layoutProvenance = note;
+
+    {
+      std::ofstream out(directory_ / kAutoIniName, std::ios::out | std::ios::trunc);
+      out << FormatAutoConfig(layout);
+      if (!out) return ProbeFailed("could not write Jiggle.auto.ini next to the .asi");
+    }
+    log_.Linef("probe: hit %zu of %zu saved to %s. Watch the configured bones: they jump up %.2f m for a moment. "
+               "If nothing moves, press the probe key again to try the next hit.",
+               attempt + 1, report.hits.size(), kAutoIniName, settings_.nudgeMeters);
+
+    LoadConfiguration();
+    selfTestUntilMs_ = GetTickCount64() + 2500;
+    MessageBeep(MB_OK);
   }
 
   // ---- state ---------------------------------------------------------------
@@ -460,6 +532,9 @@ class Plugin {
   std::unique_ptr<SkeletonAccess> skeleton_;
   bool enabled_{false};
   bool nudgeHeld_{false};
+  bool nudgeActive_{false};
+  uint64_t selfTestUntilMs_{0};
+  size_t probeAttempt_{0};
   std::array<bool, 3> wasDown_{};
   uint64_t frame_{0};
   LARGE_INTEGER frequency_{};

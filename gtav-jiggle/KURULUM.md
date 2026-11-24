@@ -1,43 +1,31 @@
 # Kurulum (Türkçe)
 
-Sadece tek kişilik (single-player / offline) mod. Online'da kullanma.
+Sadece tek kişilik (offline) mod. Online'da kullanma.
 
 ## 1. Gerekenler
+- GTA V (Epic, Enhanced) ve **Script Hook V**: <http://www.dev-c.com/gtav/scripthookv/>. `ScriptHookV.dll` ve paketle gelen ASI loader'ı oyunun `.exe` dosyasının yanına kopyala (paketin kendi okuma dosyasına bak).
+- Script Hook V'nin senin oyun build'ini desteklemesi şart. Build numarasını `.exe` dosyasına sağ tık, Özellikler, Ayrıntılar'dan oku ve Script Hook V sayfasındaki desteklenen sürümle karşılaştır. Desteklenmiyorsa hiçbir `.asi` mod yüklenmez.
 
-- GTA V (Script Hook V'nin desteklediği sürüm). Script Hook V'yi buradan indir: <http://www.dev-c.com/gtav/scripthookv/>
-  Paketin içinden `ScriptHookV.dll` ve ASI loader dosyasını oyunun ana klasörüne, `GTA5.exe`'nin yanına kopyala (loader'ın adını hatırlayarak `dinput8.dll` diye yazıyorum, paketin kendi okuma dosyasına bak).
-- Epic Games'teki GTA V Enhanced için: Script Hook V'nin senin build'ini desteklemesi şart. Aynalar `v3889.0 / 1158.13` sürümünü hem Legacy hem Enhanced için listeliyor, ama bunu yazarın sayfasından doğrulayamadım ve senin build'in daha yeni olabilir. Build numarasını oyunun `.exe` dosyasına sağ tık > Özellikler > Ayrıntılar sekmesinden oku, Script Hook V sayfasındaki desteklenen sürümle karşılaştır. Uyuşmuyorsa hiçbir `.asi` mod yüklenmez; Script Hook V güncellenene kadar beklemek gerekir.
-- Epic Games Launcher'da oyunun kurulum klasörünü kütüphanede oyunun `...` menüsündeki yönetim bölümünden açabilirsin (menü adını tam hatırlamıyorum). Dosyaları Enhanced'ın kendi `.exe` dosyasının yanına koy.
-- Jiggle için kemiği olan bir ped. Vanilla pedlerde göğüs/kalça kemiği olmayabilir. Bu tür modlar genelde ekstra kemikli add-on ped kullanır. Kemik adlarını CodeWalker'da modelin iskeletinden oku.
-
-## 2. Dosyayı al
-
-GitHub'da repo > **Actions** > `gtav-jiggle` > son başarılı (yeşil) çalışma > sayfanın altındaki **Artifacts** > `Jiggle-asi`. Zip'in içinde `Jiggle.asi`, `Jiggle.ini` ve bu rehber var.
-İlk başarılı çalışma: <https://github.com/Wailsvlr/infudesrfasdasffasxz/actions/runs/45385699157> (artifact 90 gün saklanır).
-Bu dosya gerçek Script Hook V SDK'sı ve MSVC ile derlendi, mantık testleri geçti. Oyunda henüz hiç çalıştırılmadı.
+## 2. Dosyaları al
+GitHub'da repo > **Actions** > `gtav-jiggle` > en son yeşil çalışma > en alttaki **Artifacts** > `Jiggle-asi`. İçinde `Jiggle.asi` ve `Jiggle.ini` var.
 
 ## 3. Kopyala
+`Jiggle.asi` ve `Jiggle.ini` dosyalarını `.exe`'nin yanına koy. `Jiggle.log` aynı klasörde oluşur.
 
-`Jiggle.asi` ve `Jiggle.ini` dosyalarını `GTA5.exe`'nin yanına (ASI loader'ın okuduğu klasöre) koy. `Jiggle.log` aynı klasörde oluşur.
+## 4. Oyunda (otomatik kurulum)
+1. Tek kişilik moda gir. Hareket edecek kemikleri olan bir karakterle oyna (varsayılan Michael, Franklin ve Trevor'da göğüs kemiği yok, bu mod orada bir şey sallamaz).
+2. Karakterle dik ve hareketsiz dur, **F7**'ye bas.
+3. Mod, bellekteki kemik tablosunu kendisi bulur, `Jiggle.auto.ini` dosyasına yazar ve yaklaşık 2,5 saniye boyunca ayarlı kemikleri yukarı kaldırarak test eder.
+4. Kemikler **zıpladıysa** kurulum doğru. **F6** ile fiziği aç/kapat.
+5. **Zıplamadıysa** F7'ye tekrar bas, sıradaki adayı dener. Her adım `Jiggle.log` dosyasında yazılı.
 
-## 4. İlk çalıştırma: offsetleri yakala
+Tuşlar: F6 aç/kapat, F7 kurulum, F8 INI'yi yeniden yükle, F9 basılı tut = zıplatma testi.
 
-Bu adımlar yapılmadan mod hiçbir şey yazmaz (kapalı kalır, bu kasıtlı).
-
-1. `Jiggle.ini` içinde `[Probe]` bölümündeki `Bones=` satırına, oynadığın pedde var olan en az iki kemik adını yaz (virgülle ayır, aralarında en az ~0.1 m mesafe olsun).
-2. Oyunu aç, tek kişilik moda gir, karakterle dik ve hareketsiz dur, **F7**'ye bas.
-3. `Jiggle.log` dosyasını aç:
-   - `main module:` satırındaki `SizeOfImage` ve `TimeDateStamp` değerlerini `[Build]` bölümündeki `ExpectedImageSize` ve `ExpectedTimeDateStamp` alanlarına yaz.
-   - `probe: hit` satırlarından `chain`, `Bone0TranslationOffset` ve `stride` değerlerini `[Skeleton]` bölümündeki `Chain`, `Bone0TranslationOffset`, `MatrixStride` alanlarına yaz. `MaxBoneIndex` değerini ped iskeletinin en yüksek kemik indeksi olarak gir.
-4. Sallanacak kemikleri `[Bone.Isim]` bölümlerine `Name=` ile ekle (uç/leaf kemik seç).
-5. Oyunda **F8** ile INI'yi yeniden yükle.
-
-## 5. Test
-
-- **F9**'a basılı tut: ayarlı kemikler yaklaşık 10 cm yukarı zıplamalı. Zıplamıyorsa o hit işe yaramadı, `Jiggle.log`'daki sıradaki hit'i dene.
-- Zıplıyorsa **F6** ile fiziği aç/kapat. Bip sesi: normal bip = açık/tamam, yıldız sesi = kapalı, el işareti sesi = kapalı kapı veya hata (sebep `Jiggle.log`'da).
-- Fizik değerleri (`FrequencyHz`, `DampingRatio`, `MaxDisplacement`, `Gain`) kalibre edilmemiş başlangıç değerleridir, gözle ayarla.
+## 5. Kemik adları
+`Jiggle.ini` içinde `SPR_L_Breast` ve `SPR_R_Breast` **doğrulanmamış aday adlar** (hatırladığım kadarıyla). İlk F7'den sonra `Jiggle.log` dosyasında `jiggle bone '...' -> index N` satırları çıkar. Numaralar 125 ve 126 ise adlar doğrudur. "not on this ped model" yazarsa adı `Jiggle.ini` içinde değiştir.
 
 ## Sorun olursa
+`Jiggle.log` dosyasının tamamını bana yapıştır (en önemlisi `probe:` ve `gate:` satırları).
 
-`Jiggle.log` dosyasının içeriğini (özellikle `main module:` ve `probe:` satırlarını) bana yapıştır.
+## Paket hakkında
+Elindeki FiveM paketi (`EnhancedModelsFM`) bu mod değil. Tek kişilik Enhanced'a kurulumu için format dönüştürme ve paketleme gerekir ve bunu denemedim.

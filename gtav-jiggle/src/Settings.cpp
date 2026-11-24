@@ -101,10 +101,39 @@ std::vector<std::string> SkeletonLayout::MissingFields() const {
   return missing;
 }
 
-LoadResult LoadSettings(std::string_view iniText) {
+std::string FormatAutoConfig(const AutoLayout& layout) {
+  const auto clean = [](std::string text) {
+    for (char& c : text) {
+      if (c == ';' || c == '#' || c == '\n' || c == '\r') c = ',';
+    }
+    return text;
+  };
+  std::string chain = "none";
+  if (!layout.chain.empty()) {
+    chain.clear();
+    for (size_t i = 0; i < layout.chain.size(); ++i) chain += (i == 0 ? "" : ",") + Hex(layout.chain[i]);
+  }
+  std::string out;
+  out += "; Written by Jiggle.asi after a successful layout probe. Values here only fill blanks in Jiggle.ini.\n";
+  out += "; Delete this file to start over (press the probe key again).\n";
+  out += "[Build]\n";
+  out += "ExpectedImageSize=" + Hex(layout.imageSize) + "\n";
+  out += "ExpectedTimeDateStamp=" + Hex(layout.timeDateStamp) + "\n";
+  out += "Provenance=" + clean(layout.buildProvenance) + "\n";
+  out += "[Skeleton]\n";
+  out += "Chain=" + chain + "\n";
+  out += "Bone0TranslationOffset=" + Hex(layout.bone0TranslationOffset) + "\n";
+  out += "MatrixStride=" + std::to_string(layout.matrixStride) + "\n";
+  out += "MaxBoneIndex=" + std::to_string(layout.maxBoneIndex) + "\n";
+  out += "Provenance=" + clean(layout.layoutProvenance) + "\n";
+  return out;
+}
+
+LoadResult LoadSettings(std::string_view iniText, std::string_view autoIniText) {
   LoadResult result;
   Settings& s = result.settings;
-  const IniDocument doc = ParseIni(iniText);
+  IniDocument doc = ParseIni(iniText);
+  if (!autoIniText.empty()) doc = MergeUnset(std::move(doc), ParseIni(autoIniText), {"build", "skeleton"});
   Loader in(doc, result.warnings);
 
   for (uint32_t stride = 16; stride <= 256; stride += 16) s.probe.strides.push_back(stride);

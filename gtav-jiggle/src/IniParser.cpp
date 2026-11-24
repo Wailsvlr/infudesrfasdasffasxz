@@ -124,6 +124,27 @@ std::optional<bool> ParseBool(std::string_view text) {
   return std::nullopt;
 }
 
+IniDocument MergeUnset(IniDocument base, const IniDocument& fallback,
+                       const std::vector<std::string>& lowerSections) {
+  for (const std::string& name : lowerSections) {
+    const IniSection* from = fallback.Find(name);
+    if (from == nullptr) continue;
+    IniSection* to = nullptr;
+    for (IniSection& s : base.sections) {
+      if (s.name == name) to = &s;
+    }
+    if (to == nullptr) {
+      base.sections.push_back(IniSection{name, {}});
+      to = &base.sections.back();
+    }
+    for (const auto& [key, value] : from->values) {
+      const auto it = to->values.find(key);
+      if (it == to->values.end() || it->second.empty()) to->values[key] = value;
+    }
+  }
+  return base;
+}
+
 std::vector<std::string> SplitList(std::string_view text, char separator) {
   std::vector<std::string> out;
   while (true) {
