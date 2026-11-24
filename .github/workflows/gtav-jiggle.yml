@@ -1,0 +1,80 @@
+name: gtav-jiggle
+
+on:
+  push:
+    paths:
+      - 'gtav-jiggle/**'
+      - '.github/workflows/gtav-jiggle.yml'
+  workflow_dispatch:
+    inputs:
+      sdk_url:
+        description: 'Direct URL of the Script Hook V SDK zip (optional; default: link scraped from dev-c.com)'
+        required: false
+        default: ''
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch Script Hook V SDK (not stored in the repo)
+        shell: pwsh
+        env:
+          SDK_URL: ${{ github.event.inputs.sdk_url }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $page = 'http://www.dev-c.com/gtav/scripthookv/'
+          $url = $env:SDK_URL
+          if (-not $url) {
+            $html = (Invoke-WebRequest -Uri $page -UseBasicParsing).Content
+            $m = [regex]::Matches($html, 'href="([^"]*ScriptHookV_SDK[^"]*\.zip)"', 'IgnoreCase')
+            if ($m.Count -eq 0) { throw "No SDK link found on $page. Run this workflow manually and pass sdk_url." }
+            $url = ([System.Uri]::new([System.Uri]$page, $m[0].Groups[1].Value)).AbsoluteUri
+          }
+          Write-Host "SDK url: $url"
+          Invoke-WebRequest -Uri $url -Headers @{ Referer = $page } -OutFile sdk.zip -UseBasicParsing
+          Expand-Archive sdk.zip -DestinationPath sdk -Force
+          Get-ChildItem sdk -Recurse | Select-Object -First 40 | ForEach-Object { Write-Host $_.FullName }
+          $main = Get-ChildItem sdk -Recurse -Filter main.h | Select-Object -First 1
+          $lib = Get-ChildItem sdk -Recurse -Filter ScriptHookV.lib | Select-Object -First 1
+          if (-not $main -or -not $lib) { throw 'main.h or ScriptHookV.lib not found in the SDK zip' }
+          "SHV_INC_DIR=$($main.DirectoryName)" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          "SHV_LIB_FILE=$($lib.FullName)" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+
+      - name: Show the SDK declarations the plugin depends on
+        shell: pwsh
+        run: |
+          $names = 'scriptRegister','scriptUnregister','scriptWait','getScriptHandleBaseAddress','worldGetAllPeds',
+                   'PLAYER_PED_ID','DOES_ENTITY_EXIST','GET_ENTITY_COORDS','GET_ENTITY_FORWARD_VECTOR','GET_ENTITY_MODEL',
+                   'GET_ENTITY_BONE_INDEX_BY_NAME','GET_WORLD_POSITION_OF_ENTITY_BONE','IS_PED_RAGDOLL'
+          foreach ($n in $names) {
+            $hits = Get-ChildItem $env:SHV_INC_DIR -Filter *.h | Select-String -Pattern "\b$n\b" | Select-Object -First 2
+            if (-not $hits) { Write-Host "MISSING in SDK headers: $n" }
+            foreach ($h in $hits) { Write-Host ("{0}: {1}" -f $n, $h.Line.Trim()) }
+          }
+
+      - name: Configure
+        run: >
+          cmake -S gtav-jiggle -B build -G "Visual Studio 17 2022" -A x64
+          -DSHV_INC_DIR="$env:SHV_INC_DIR" -DSHV_LIB_FILE="$env:SHV_LIB_FILE"
+
+      - name: Build
+        run: cmake --build build --config Release
+
+      - name: Test (pure logic)
+        run: ctest --test-dir build -C Release --output-on-failure
+
+      - name: Check outputs
+        shell: pwsh
+        run: |
+          if (-not (Test-Path build/Release/Jiggle.asi)) { throw 'Jiggle.asi was not produced' }
+          Get-Item build/Release/Jiggle.asi, build/Release/Jiggle.ini | Format-List FullName, Length
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Jiggle-asi
+          path: |
+            build/Release/Jiggle.asi
+            build/Release/Jiggle.ini
+            gtav-jiggle/KURULUM.md
