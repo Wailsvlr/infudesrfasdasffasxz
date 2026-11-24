@@ -4,6 +4,9 @@
 // stores through SkeletonAccess, and the game rewrites that memory on its own
 // schedule, so unloading cannot leave anything dangling.
 
+#ifndef NOMINMAX
+#define NOMINMAX  // windows.h min/max macros break std::min/std::max
+#endif
 #include <windows.h>
 
 #include <algorithm>

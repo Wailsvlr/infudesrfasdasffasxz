@@ -1,5 +1,8 @@
 #include "Win32Support.h"
 
+#ifndef NOMINMAX
+#define NOMINMAX  // windows.h min/max macros break std::min/std::max
+#endif
 #include <windows.h>
 
 #include <cstdarg>
