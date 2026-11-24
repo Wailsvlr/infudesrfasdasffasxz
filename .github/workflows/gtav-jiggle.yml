@@ -15,6 +15,8 @@ on:
 jobs:
   build:
     runs-on: windows-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -84,3 +86,23 @@ jobs:
             build/Jiggle.asi
             build/Jiggle.ini
             gtav-jiggle/KURULUM.md
+
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item build/Jiggle.asi, build/Jiggle.ini, gtav-jiggle/KURULUM.md dist/
+          Compress-Archive -Path dist/* -DestinationPath Jiggle.zip -Force
+          (Get-FileHash Jiggle.zip -Algorithm SHA256).Hash | Out-File sha256.txt
+          Get-Item Jiggle.zip | Format-List FullName, Length
+
+      - name: Publish download link (GitHub Release jiggle-latest)
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete jiggle-latest --yes --cleanup-tag 2>$null
+          $global:LASTEXITCODE = 0
+          gh release create jiggle-latest Jiggle.zip --prerelease --target "${{ github.sha }}" `
+            --title "Jiggle (latest CI build)" `
+            --notes "Jiggle.asi + Jiggle.ini + KURULUM.md. Built by CI against the Script Hook V SDK from commit ${{ github.sha }}. Not tested in the game yet. SHA256 of Jiggle.zip: $(Get-Content sha256.txt)"
