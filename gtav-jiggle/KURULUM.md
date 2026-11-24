@@ -6,13 +6,15 @@ Sadece tek kişilik (single-player / offline) mod. Online'da kullanma.
 
 - GTA V (Script Hook V'nin desteklediği sürüm). Script Hook V'yi buradan indir: <http://www.dev-c.com/gtav/scripthookv/>
   Paketin içinden `ScriptHookV.dll` ve ASI loader dosyasını oyunun ana klasörüne, `GTA5.exe`'nin yanına kopyala (loader'ın adını hatırlayarak `dinput8.dll` diye yazıyorum, paketin kendi okuma dosyasına bak).
-- Script Hook V'nin senin oyun sürümünü desteklediğini kontrol et. Ben bunu doğrulayamadım. Sürüm uyuşmuyorsa oyun açılırken hata verir veya mod hiç yüklenmez.
+- Epic Games'teki GTA V Enhanced için: Script Hook V'nin senin build'ini desteklemesi şart. Aynalar `v3889.0 / 1158.13` sürümünü hem Legacy hem Enhanced için listeliyor, ama bunu yazarın sayfasından doğrulayamadım ve senin build'in daha yeni olabilir. Build numarasını oyunun `.exe` dosyasına sağ tık > Özellikler > Ayrıntılar sekmesinden oku, Script Hook V sayfasındaki desteklenen sürümle karşılaştır. Uyuşmuyorsa hiçbir `.asi` mod yüklenmez; Script Hook V güncellenene kadar beklemek gerekir.
+- Epic Games Launcher'da oyunun kurulum klasörünü kütüphanede oyunun `...` menüsündeki yönetim bölümünden açabilirsin (menü adını tam hatırlamıyorum). Dosyaları Enhanced'ın kendi `.exe` dosyasının yanına koy.
 - Jiggle için kemiği olan bir ped. Vanilla pedlerde göğüs/kalça kemiği olmayabilir. Bu tür modlar genelde ekstra kemikli add-on ped kullanır. Kemik adlarını CodeWalker'da modelin iskeletinden oku.
 
 ## 2. Dosyayı al
 
-GitHub'da repo > **Actions** > `gtav-jiggle` > son başarılı çalışma > **Artifacts** > `Jiggle-asi`. Zip'in içinde `Jiggle.asi` ve `Jiggle.ini` var.
-(Kendin derlemek istersen `README.md` içindeki build komutları.)
+GitHub'da repo > **Actions** > `gtav-jiggle` > son başarılı (yeşil) çalışma > sayfanın altındaki **Artifacts** > `Jiggle-asi`. Zip'in içinde `Jiggle.asi`, `Jiggle.ini` ve bu rehber var.
+İlk başarılı çalışma: <https://github.com/Wailsvlr/infudesrfasdasffasxz/actions/runs/45385699157> (artifact 90 gün saklanır).
+Bu dosya gerçek Script Hook V SDK'sı ve MSVC ile derlendi, mantık testleri geçti. Oyunda henüz hiç çalıştırılmadı.
 
 ## 3. Kopyala
 
